@@ -43,6 +43,10 @@ type resolved struct {
 // Broker holds resolved values only in daemon memory.
 type Broker struct {
 	secrets []resolved
+	// trie indexes every value and placeholder representation once, so
+	// matching cost does not grow with the number of configured secrets. It is
+	// read-only after New returns.
+	trie *needleTrie
 }
 
 // Load reads a strict JSON file and resolves each value from the host process
@@ -142,6 +146,7 @@ func New(file File, lookup func(string) (string, bool)) (*Broker, error) {
 			marker:                     []byte("[secret:" + definition.Name + "]"),
 		})
 	}
+	broker.trie = newNeedleTrie(broker.secrets)
 	return broker, nil
 }
 

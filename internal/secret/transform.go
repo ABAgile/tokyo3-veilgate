@@ -130,17 +130,55 @@ func (b *Broker) Scrub(data []byte, client, host string) ([]byte, []string) {
 	if b == nil || len(data) == 0 {
 		return data, nil
 	}
-	patterns := make([]replacement, 0, len(b.secrets)*4)
-	masked := make([]resolved, 0, len(b.secrets))
-	for _, item := range b.secrets {
-		if slices.Contains(item.Clients, client) && matchesHost(item.AllowedHosts, host) {
-			for _, representation := range item.representations {
-				patterns = append(patterns, replacement{name: item.Name, from: representation, to: item.placeholderBytes})
-			}
-			masked = append(masked, item)
+	scope := b.scopeFor(client, host)
+	var out bytes.Buffer
+	out.Grow(len(data))
+	used := make(map[string]struct{})
+	copied := 0
+	for offset := 0; offset < len(data); {
+		length, secret, masked := b.trie.longest(data[offset:], kindValue, scope)
+		if length == 0 {
+			length, secret = b.maskedAt(data[offset:], masked, scope)
+		}
+		if length == 0 {
+			offset++
+			continue
+		}
+		out.Write(data[copied:offset])
+		out.Write(b.secrets[secret].placeholderBytes)
+		used[b.secrets[secret].Name] = struct{}{}
+		offset += length
+		copied = offset
+	}
+	out.Write(data[copied:])
+	return out.Bytes(), sortedNames(used)
+}
+
+// scopeFor marks the secrets authorized for one client and host, so the
+// matcher can share a single trie across every scope instead of rebuilding a
+// pattern set per request.
+func (b *Broker) scopeFor(client, host string) []bool {
+	scope := make([]bool, len(b.secrets))
+	for i := range b.secrets {
+		item := &b.secrets[i]
+		scope[i] = slices.Contains(item.Clients, client) && matchesHost(item.AllowedHosts, host)
+	}
+	return scope
+}
+
+// maskedAt resolves a masked rendering at the current offset. Candidates are
+// already in secret order, so the first match wins exactly as a scan over the
+// configured secrets would.
+func (b *Broker) maskedAt(data []byte, candidates []int, scope []bool) (int, int) {
+	for _, secret := range candidates {
+		if scope != nil && !scope[secret] {
+			continue
+		}
+		if length := maskedSecretLength(data, b.secrets[secret].valueBytes); length > 0 {
+			return length, secret
 		}
 	}
-	return replaceResponseSecrets(data, patterns, masked)
+	return 0, 0
 }
 
 // Sanitize replaces every configured value and placeholder with a stable
@@ -149,17 +187,22 @@ func (b *Broker) Sanitize(data []byte) []byte {
 	if b == nil || len(data) == 0 {
 		return append([]byte(nil), data...)
 	}
-	patterns := make([]replacement, 0, len(b.secrets)*8)
-	for _, item := range b.secrets {
-		for _, representation := range item.representations {
-			patterns = append(patterns, replacement{name: item.Name, from: representation, to: item.marker})
+	var out bytes.Buffer
+	out.Grow(len(data))
+	copied := 0
+	for offset := 0; offset < len(data); {
+		length, secret, _ := b.trie.longest(data[offset:], kindValue|kindPlaceholder, nil)
+		if length == 0 {
+			offset++
+			continue
 		}
-		for _, representation := range item.placeholderRepresentations {
-			patterns = append(patterns, replacement{name: item.Name, from: representation, to: item.marker})
-		}
+		out.Write(data[copied:offset])
+		out.Write(b.secrets[secret].marker)
+		offset += length
+		copied = offset
 	}
-	out, _ := replaceSinglePass(data, patterns)
-	return out
+	out.Write(data[copied:])
+	return out.Bytes()
 }
 
 // ContainsPlaceholder reports whether data includes any configured placeholder.
@@ -274,48 +317,6 @@ func secretRepresentations(value string) [][]byte {
 	return out
 }
 
-type replacement struct {
-	name string
-	from []byte
-	to   []byte
-}
-
-func replaceResponseSecrets(data []byte, patterns []replacement, masked []resolved) ([]byte, []string) {
-	sort.SliceStable(patterns, func(i, j int) bool { return len(patterns[i].from) > len(patterns[j].from) })
-	var out bytes.Buffer
-	out.Grow(len(data))
-	used := make(map[string]struct{})
-	for offset := 0; offset < len(data); {
-		matched := false
-		for _, pattern := range patterns {
-			if bytes.HasPrefix(data[offset:], pattern.from) {
-				out.Write(pattern.to)
-				used[pattern.name] = struct{}{}
-				offset += len(pattern.from)
-				matched = true
-				break
-			}
-		}
-		if matched {
-			continue
-		}
-		for _, item := range masked {
-			if length := maskedSecretLength(data[offset:], item.valueBytes); length > 0 {
-				out.WriteString(item.Placeholder)
-				used[item.Name] = struct{}{}
-				offset += length
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			out.WriteByte(data[offset])
-			offset++
-		}
-	}
-	return out.Bytes(), sortedNames(used)
-}
-
 func maskedSecretLength(data, value []byte) int {
 	const minVisible = 4
 	if len(value) < minVisible*2 {
@@ -344,30 +345,6 @@ func maskedSecretLength(data, value []byte) int {
 		}
 	}
 	return 0
-}
-
-func replaceSinglePass(data []byte, patterns []replacement) ([]byte, []string) {
-	sort.SliceStable(patterns, func(i, j int) bool { return len(patterns[i].from) > len(patterns[j].from) })
-	var out bytes.Buffer
-	out.Grow(len(data))
-	used := make(map[string]struct{})
-	for offset := 0; offset < len(data); {
-		matched := false
-		for _, pattern := range patterns {
-			if len(pattern.from) > 0 && bytes.HasPrefix(data[offset:], pattern.from) {
-				out.Write(pattern.to)
-				used[pattern.name] = struct{}{}
-				offset += len(pattern.from)
-				matched = true
-				break
-			}
-		}
-		if !matched {
-			out.WriteByte(data[offset])
-			offset++
-		}
-	}
-	return out.Bytes(), sortedNames(used)
 }
 
 func sortedNames(names map[string]struct{}) []string {
