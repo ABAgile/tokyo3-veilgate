@@ -1,0 +1,19 @@
+{
+  "clients": [
+    {
+      "name": "agent-dev",
+      "token": "7A6dsyAcwBa7NkD9yuAsyacW",
+      "observe_all_public_hosts": true,
+      "allowed_hosts": [
+        "api.openai.com",
+        "google.com",
+        "duckduckgo.com",
+        "postman-echo.com",
+        "echo.websocket.org"
+      ],
+      "allowed_ports": [
+        443
+      ]
+    }
+  ]
+}
