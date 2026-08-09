@@ -55,8 +55,8 @@ var prohibitedPrefixes = mustPrefixes(
 	"192.88.99.0/24", "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24",
 	"203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4",
 	// IPv6 special-purpose ranges.
-	"::/128", "::1/128", "100::/64", "2001:db8::/32", "fc00::/7",
-	"fe80::/10", "ff00::/8",
+	"::/128", "::1/128", "100::/64", "2001:db8::/32", "3fff::/20",
+	"5f00::/16", "fc00::/7", "fe80::/10", "ff00::/8",
 	// IPv6 transition and non-routable ranges that embed or stand in for an
 	// IPv4 destination: NAT64 (well-known and local-use), Teredo, 6to4, and
 	// ORCHID.

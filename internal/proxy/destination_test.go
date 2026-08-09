@@ -24,6 +24,10 @@ func TestIsPublic(t *testing.T) {
 		{"fe80::1", false},
 		{"::ffff:127.0.0.1", false},
 		{"192.88.99.1", false},
+		{"3fff::1", false},
+		{"3fff:0fff:ffff:ffff:ffff:ffff:ffff:ffff", false},
+		{"5f00::1", false},
+		{"5f00:ffff:ffff:ffff:ffff:ffff:ffff:ffff", false},
 	} {
 		if got := isPublic(netip.MustParseAddr(tc.address)); got != tc.want {
 			t.Errorf("isPublic(%s) = %v, want %v", tc.address, got, tc.want)
@@ -66,6 +70,10 @@ func TestIsPublicAcceptsNeighboursOfBlockedRanges(t *testing.T) {
 		"64:ff9c::1",           // adjacent to the NAT64 prefixes
 		"192.88.98.1",          // adjacent to the 6to4 relay anycast block
 		"192.89.0.1",
+		"3fff:1000::1", // first address past documentation 3fff::/20
+		"4000::1",
+		"5f01::1", // first group past SRv6 SID 5f00::/16
+		"5eff::1",
 	} {
 		if !isPublic(netip.MustParseAddr(address)) {
 			t.Errorf("isPublic(%s) = false, want true", address)
