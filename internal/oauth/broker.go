@@ -384,7 +384,8 @@ func (b *Broker) replaceRequestValue(value, client, host string, secure bool, si
 	}
 	present := b.containsKnownPlaceholderLocked([]byte(value))
 	if site == siteCredential && !present {
-		present = oauthPlaceholderPattern.MatchString(value)
+		present = oauthPlaceholderPattern.MatchString(value) ||
+			virtualJWTPlaceholderInCredential(value, allowScheme)
 	}
 	if !present {
 		return value, nil, nil
@@ -424,7 +425,8 @@ func (b *Broker) replaceRequestValue(value, client, host string, secure bool, si
 		out = strings.ReplaceAll(out, placeholder, replacement)
 		used[name] = struct{}{}
 	}
-	if site == siteCredential && oauthPlaceholderPattern.MatchString(out) {
+	if site == siteCredential && (oauthPlaceholderPattern.MatchString(out) ||
+		virtualJWTPlaceholderInCredential(out, allowScheme)) {
 		return value, nil, errors.New("unknown OAuth token placeholder")
 	}
 	return out, sortedNames(used), nil
@@ -567,7 +569,7 @@ func (b *Broker) validCredentialValueLocked(value string, allowScheme bool) bool
 		if reference, ok := b.virtual[candidate]; ok && reference.key != "" {
 			return true
 		}
-		if !known && oauthPlaceholderPattern.FindString(candidate) == candidate {
+		if !known && (oauthPlaceholderPattern.FindString(candidate) == candidate || isVirtualJWTPlaceholder(candidate)) {
 			return true
 		}
 	}
@@ -751,6 +753,37 @@ func isJWT(token string) bool {
 	}
 	payload, err := decodeBase64URL(parts[1])
 	return err == nil && json.Valid(payload)
+}
+
+func isVirtualJWTPlaceholder(token string) bool {
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 || slices.Contains(parts, "") {
+		return false
+	}
+	payload, err := decodeBase64URL(parts[1])
+	if err != nil {
+		return false
+	}
+	var claims struct {
+		VeilgateID string `json:"_veilgate_id"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return false
+	}
+	return claims.VeilgateID != "" && oauthPlaceholderPattern.FindString(claims.VeilgateID) == claims.VeilgateID
+}
+
+func virtualJWTPlaceholderInCredential(value string, allowScheme bool) bool {
+	value = strings.TrimSpace(value)
+	if isVirtualJWTPlaceholder(value) {
+		return true
+	}
+	if allowScheme {
+		if _, credential, ok := strings.Cut(value, " "); ok {
+			return isVirtualJWTPlaceholder(strings.TrimSpace(credential))
+		}
+	}
+	return false
 }
 
 func makeVirtualJWT(realJWT string) (string, error) {

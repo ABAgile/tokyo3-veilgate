@@ -190,9 +190,17 @@ backups; encryption at rest is not implemented yet.
 `auth.json` is runtime state, not policy. It contains real access/refresh token
 values for recovery and examination, while flow captures, audit events, logs,
 and the console expose only virtual-token names or `[secret:name]` markers.
-The broker supports opaque OAuth tokens. Applications that locally validate JWT
-signatures, use DPoP or mTLS-bound tokens, or depend on token fingerprints may
-need a specialized adapter and are not transparent under this mode.
+The broker supports opaque OAuth tokens. JWT access tokens are represented by
+virtual JWTs that preserve the real JOSE header and payload claims, including
+claims such as `sub`, `email`, `scope`, tenant/org identifiers, and `exp`; only
+the signature is replaced with a dummy signature and an internal `_veilgate_id`
+claim is added. Those claims are therefore visible to the sandbox: JWT
+virtualization is not an opaque or claim-redacting mode. Virtual JWTs, like
+opaque placeholders, are rejected in credential-bearing headers and query
+values after their mapping is rotated or if they are forged. Applications that
+locally validate JWT signatures, use DPoP or mTLS-bound tokens, or depend on
+token fingerprints may need a specialized adapter and are not transparent under
+this mode.
 
 The checked-in `config/oauth.example.json` is mounted by Compose as an example
 policy, but OAuth brokering is disabled by default. Set the Compose variable

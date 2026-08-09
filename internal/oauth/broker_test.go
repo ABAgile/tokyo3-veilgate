@@ -248,6 +248,49 @@ func TestBrokerVirtualizesJWTWithPreservedClaims(t *testing.T) {
 	}
 }
 
+func TestBrokerRejectsStaleVirtualJWT(t *testing.T) {
+	broker, err := New(testOAuthFile(), filepath.Join(t.TempDir(), "auth.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	jwt := func(subject string) string {
+		header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"RS256","typ":"JWT"}`))
+		payload := base64.RawURLEncoding.EncodeToString([]byte(`{"sub":"` + subject + `","scope":"admin"}`))
+		return header + "." + payload + ".signature"
+	}
+	tokenRequest, _ := http.NewRequest(http.MethodPost, "https://login.example.com/oauth/token", nil)
+	response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}}
+	first, _, err := broker.ObserveTokenResponse(tokenRequest, response, []byte(`{"access_token":"`+jwt("user-1")+`"}`), "agent", "login.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]string
+	if err := json.Unmarshal(first, &fields); err != nil {
+		t.Fatal(err)
+	}
+	stale := fields["access_token"]
+	if stale == "" {
+		t.Fatal("missing virtual access token")
+	}
+	if _, _, err := broker.ObserveTokenResponse(tokenRequest, response, []byte(`{"access_token":"`+jwt("user-2")+`"}`), "agent", "login.example.com"); err != nil {
+		t.Fatal(err)
+	}
+
+	request, _ := http.NewRequest(http.MethodGet, "https://api.example.com/v1", nil)
+	request.Header.Set("Authorization", "Bearer "+stale)
+	if _, err := broker.Apply(request, "agent", "api.example.com", true); err == nil {
+		t.Fatal("stale virtual JWT accepted in Authorization header")
+	}
+
+	query, err := url.Parse("https://api.example.com/v1?access_token=" + url.QueryEscape(stale))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := broker.SubstituteQuery(query, "agent", "api.example.com", true); err == nil {
+		t.Fatal("stale virtual JWT accepted in query")
+	}
+}
+
 func TestBrokerKeepsSecretScopeSeparateFromBroadDestinationPolicy(t *testing.T) {
 	broker, err := New(testOAuthFile(), filepath.Join(t.TempDir(), "auth.json"))
 	if err != nil {
