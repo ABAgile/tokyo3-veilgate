@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>Traffic · Veilgate</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/formatters.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">V</span>
+        <div><strong>Veilgate</strong><span>Egress console</span></div>
+      </div>
+      <nav><a href="/" aria-current="page">Traffic</a></nav>
+      <div class="sidebar-footer">
+        <p>Bounded sanitized capture</p>
+        <button id="theme-toggle" type="button">Use light theme</button>
+      </div>
+    </aside>
+
+    <main id="traffic-workspace">
+      <header class="page-header">
+        <div>
+          <h1>Traffic</h1>
+          <p>Examine authenticated egress decisions and connection outcomes.</p>
+        </div>
+        <div class="feed-controls">
+          <div id="connection" class="connection" role="status" aria-live="polite"><span></span>Connecting</div>
+          <button id="toggle-feed" class="secondary feed-toggle" type="button" aria-label="Pause live feed">Pause feed</button>
+        </div>
+      </header>
+
+      <section id="flow-panel" class="panel" aria-labelledby="flow-heading">
+        <div class="panel-header">
+          <div><h2 id="flow-heading">Recent flows</h2><p>Newest first. Retention is bounded by policy.</p></div>
+        </div>
+        <form id="flow-filters" class="filters" aria-label="Traffic filters">
+          <label>Client<input id="filter-client" name="client" autocomplete="off"></label>
+          <label>Host<input id="filter-host" name="host" list="host-list" autocomplete="off"><datalist id="host-list"></datalist></label>
+          <label>Decision<select id="filter-decision" name="decision"><option value="">Any decision</option><option value="allowed">Allowed</option><option value="denied">Denied</option></select></label>
+          <label>Mode<select id="filter-mode" name="mode"><option value="">Any mode</option><option value="direct">Direct</option><option value="intercepted">Intercepted HTTP/1.1</option><option value="intercepted-h2">Intercepted HTTP/2</option><option value="websocket">WebSocket</option><option value="intercepted-session">Intercepted session</option><option value="opaque-tunnel">Opaque tunnel</option></select></label>
+          <div class="filter-actions"><button class="primary" type="submit">Apply filters</button><button id="reset-filters" class="secondary" type="button">Reset</button></div>
+        </form>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Time</th><th>Decision</th><th>Client</th><th>Request</th><th>Target</th><th>Mode</th><th>Status</th><th>Received</th><th>Duration</th></tr></thead>
+            <tbody id="flows"></tbody>
+            <tfoot id="flows-foot" hidden><tr id="flows-sentinel"><td colspan="9"><button id="load-older" class="secondary" type="button">Load older flows</button><span id="pagination-status" role="status" aria-live="polite"></span></td></tr></tfoot>
+          </table>
+          <div id="empty" class="empty">
+            <h3>No traffic recorded</h3>
+            <p>Flows appear after an authenticated client sends a request through the proxy.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <template id="detail-template">
+    <div class="flow-detail">
+      <div class="detail-bar">
+        <p class="eyebrow">Selected flow</p>
+        <button class="secondary close-detail" type="button">Close details</button>
+      </div>
+      <div class="tabs" role="tablist" aria-label="Flow detail sections">
+        <button type="button" role="tab" data-tab="overview" aria-selected="true">Overview</button>
+        <button type="button" role="tab" data-tab="request" aria-selected="false" tabindex="-1">Request</button>
+        <button type="button" role="tab" data-tab="response" aria-selected="false" tabindex="-1">Response</button>
+        <button type="button" role="tab" data-tab="websocket" aria-selected="false" tabindex="-1">WebSocket</button>
+      </div>
+      <div class="tab-body">
+        <div class="tab-panel" role="tabpanel" data-panel="overview">
+          <dl id="detail-fields"></dl>
+          <div class="trace"><h3>Policy trace</h3><ol id="policy-trace"></ol></div>
+          <p class="notice">Capture is bounded and stored in plaintext. Credential-bearing header values appear as <code>[redacted]</code>; configured secrets and placeholders appear only as <code>[secret:name]</code>. Proxy credentials and binary payload bytes are not retained; WebSocket binary messages retain metadata and SHA-256 only.</p>
+        </div>
+        <div class="tab-panel" role="tabpanel" data-panel="request" hidden>
+          <div class="subtabs" role="tablist" aria-label="Request sections">
+            <button type="button" role="tab" data-subtab="req-headers" aria-selected="true">Headers</button>
+            <button type="button" role="tab" data-subtab="req-body" aria-selected="false" tabindex="-1">Body</button>
+          </div>
+          <div class="subtab-panel" role="tabpanel" data-subpanel="req-headers"><div id="capture-sections" class="capture-request-headers"></div><p class="capture-empty" hidden>No sanitized request headers or query retained for this flow.</p></div>
+          <div class="subtab-panel" role="tabpanel" data-subpanel="req-body" hidden><div class="capture-request-body"></div><p class="capture-empty" hidden>No request body retained for this flow.</p></div>
+        </div>
+        <div class="tab-panel" role="tabpanel" data-panel="response" hidden>
+          <div class="subtabs" role="tablist" aria-label="Response sections">
+            <button type="button" role="tab" data-subtab="resp-headers" aria-selected="true">Headers</button>
+            <button type="button" role="tab" data-subtab="resp-body" aria-selected="false" tabindex="-1">Body</button>
+          </div>
+          <div class="subtab-panel" role="tabpanel" data-subpanel="resp-headers"><div class="capture-response-headers"></div><p class="capture-empty" hidden>No sanitized response headers retained for this flow.</p></div>
+          <div class="subtab-panel" role="tabpanel" data-subpanel="resp-body" hidden><div class="capture-response-body"></div><p class="capture-empty" hidden>No response body retained for this flow.</p></div>
+        </div>
+        <div class="tab-panel" role="tabpanel" data-panel="websocket" hidden><div class="capture-websocket"></div><p class="capture-empty" hidden>No WebSocket messages retained for this flow.</p></div>
+      </div>
+    </div>
+  </template>
+</body>
+</html>
