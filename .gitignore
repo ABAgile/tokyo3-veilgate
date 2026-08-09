@@ -2,6 +2,7 @@
 # https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
 #
 # Binaries for programs and plugins
+/bin/
 *.exe
 *.exe~
 *.dll
@@ -24,8 +25,22 @@ profile.cov
 go.work
 go.work.sum
 
-# env file
+# Local secrets and generated interception CA material
 .env
+/config/clients.json
+/config/secrets.json
+/config/oauth.json
+/config/auth.json
+/config/intercept-ca.crt
+/config/intercept-ca.key
+/config/proxy.crt
+/config/proxy.key
+/config/console.crt
+/config/console.key
+/var/
+
+# Local review logs and working notes
+/docs/reviews/
 
 # Editor/IDE
 # .idea/
