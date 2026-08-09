@@ -2,6 +2,7 @@
 package config
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -54,6 +55,9 @@ func (f *File) Validate() error {
 		return errors.New("client policy must contain at least one client")
 	}
 	names := make(map[string]struct{}, len(f.Clients))
+	// Tokens are compared by digest so the check never keys a map on raw
+	// credential material.
+	tokens := make(map[[sha256.Size]byte]string, len(f.Clients))
 	for i := range f.Clients {
 		c := &f.Clients[i]
 		c.Name = strings.TrimSpace(c.Name)
@@ -67,6 +71,14 @@ func (f *File) Validate() error {
 		if len(c.Token) < 24 {
 			return fmt.Errorf("client %q token must be at least 24 characters", c.Name)
 		}
+		// A shared token makes identity ambiguous: authentication could only
+		// resolve it by guessing, and every audit record for one client would
+		// be attributable to the other.
+		digest := sha256.Sum256([]byte(c.Token))
+		if owner, exists := tokens[digest]; exists {
+			return fmt.Errorf("clients %q and %q share the same token", owner, c.Name)
+		}
+		tokens[digest] = c.Name
 		if len(c.AllowedHosts) == 0 && !c.ObserveAllPublicHosts {
 			return fmt.Errorf("client %q must allow at least one host or enable observe_all_public_hosts", c.Name)
 		}
@@ -125,15 +137,25 @@ func validHostname(host string) bool {
 
 // Authenticate returns the client matching a bearer token. Every configured
 // token is compared to avoid making the first matching position observable.
+//
+// An ambiguous credential is refused rather than resolved. Validate rejects
+// duplicate tokens, so more than one match means the policy reached this point
+// unvalidated; picking a winner there would silently grant whichever identity
+// happened to be listed last.
 func (f *File) Authenticate(token string) (*Client, bool) {
 	var match *Client
+	matches := 0
 	for i := range f.Clients {
 		candidate := &f.Clients[i]
 		if len(token) == len(candidate.Token) && subtle.ConstantTimeCompare([]byte(token), []byte(candidate.Token)) == 1 {
 			match = candidate
+			matches++
 		}
 	}
-	return match, match != nil
+	if matches != 1 {
+		return nil, false
+	}
+	return match, true
 }
 
 // HasObservationClients reports whether any identity permits all public hosts.

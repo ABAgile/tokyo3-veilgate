@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -87,6 +88,66 @@ func TestAuthenticate(t *testing.T) {
 	}
 }
 
+// TestValidateRejectsSharedTokenNamesBothClients checks the operator gets
+// enough to find the offending pair, and that the token itself is not echoed
+// into an error that may be logged.
+func TestValidateRejectsSharedTokenNamesBothClients(t *testing.T) {
+	const shared = "012345678901234567890123"
+	f := &File{Clients: []Client{
+		{Name: "low", Token: shared, AllowedHosts: []string{"example.com"}},
+		{Name: "high", Token: shared, ObserveAllPublicHosts: true},
+	}}
+	err := f.Validate()
+	if err == nil {
+		t.Fatal("Validate() accepted a shared token")
+	}
+	message := err.Error()
+	if !strings.Contains(message, "low") || !strings.Contains(message, "high") {
+		t.Errorf("error does not name both clients: %q", message)
+	}
+	if strings.Contains(message, shared) {
+		t.Errorf("error leaks the token: %q", message)
+	}
+}
+
+// TestAuthenticateRefusesAmbiguousToken guards the authentication path
+// directly. Validate is the primary defence, but File is constructible without
+// it, and resolving an ambiguous credential last-match-wins would hand the
+// caller whichever identity happened to be listed last.
+func TestAuthenticateRefusesAmbiguousToken(t *testing.T) {
+	const shared = "012345678901234567890123"
+	unvalidated := &File{Clients: []Client{
+		{Name: "low", Token: shared, AllowedHosts: []string{"example.com"}, AllowedPorts: []int{443}},
+		{Name: "high", Token: shared, ObserveAllPublicHosts: true, AllowedPorts: []int{443}},
+	}}
+	if client, ok := unvalidated.Authenticate(shared); ok {
+		t.Fatalf("Authenticate(ambiguous) = %q, want refusal", client.Name)
+	}
+}
+
+// TestAuthenticateAcceptsDistinctTokens confirms refusing ambiguity did not
+// break the ordinary multi-client case.
+func TestAuthenticateAcceptsDistinctTokens(t *testing.T) {
+	f := &File{Clients: []Client{
+		{Name: "first", Token: "aaaaaaaaaaaaaaaaaaaaaaaa", AllowedHosts: []string{"example.com"}},
+		{Name: "second", Token: "bbbbbbbbbbbbbbbbbbbbbbbb", AllowedHosts: []string{"example.org"}},
+		{Name: "third", Token: "cccccccccccccccccccccccccccc", AllowedHosts: []string{"example.net"}},
+	}}
+	if err := f.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ token, want string }{
+		{"aaaaaaaaaaaaaaaaaaaaaaaa", "first"},
+		{"bbbbbbbbbbbbbbbbbbbbbbbb", "second"},
+		{"cccccccccccccccccccccccccccc", "third"},
+	} {
+		client, ok := f.Authenticate(tc.token)
+		if !ok || client.Name != tc.want {
+			t.Errorf("Authenticate(%q) = %v, %v, want %q", tc.token, client, ok, tc.want)
+		}
+	}
+}
+
 func TestValidateRejectsUnsafeConfiguration(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -97,6 +158,10 @@ func TestValidateRejectsUnsafeConfiguration(t *testing.T) {
 		{"no destination policy", File{Clients: []Client{{Name: "a", Token: "012345678901234567890123"}}}},
 		{"middle wildcard", File{Clients: []Client{{Name: "a", Token: "012345678901234567890123", AllowedHosts: []string{"api.*.example.com"}}}}},
 		{"unicode", File{Clients: []Client{{Name: "a", Token: "012345678901234567890123", AllowedHosts: []string{"éxample.com"}}}}},
+		{"duplicate token", File{Clients: []Client{
+			{Name: "low", Token: "012345678901234567890123", AllowedHosts: []string{"example.com"}},
+			{Name: "high", Token: "012345678901234567890123", ObserveAllPublicHosts: true},
+		}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := tc.file.Validate(); err == nil {
