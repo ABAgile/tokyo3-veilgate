@@ -334,7 +334,10 @@ reported by `mkcert -CAROOT`. It is not reachable by containers on
 `tokyo3_hq_sandbox`. The current development credentials default to `admin` /
 `admin`; override `VEILGATED_CONSOLE_USERNAME` and
 `VEILGATED_CONSOLE_PASSWORD` before using the stack beyond an isolated
-development network. Sandbox containers on `tokyo3_hq_sandbox` can reach the
+development network. Veilgated requires both credentials when
+`VEILGATED_CONSOLE_ADDR` is not a loopback address. A loopback console may omit
+both credentials, but the daemon logs an explicit unauthenticated warning.
+Sandbox containers on `tokyo3_hq_sandbox` can reach the
 proxy at `https://veilgated-proxy:8080` by default; set
 `VEILGATED_PROXY_PORT` to change the sandbox-facing listener port. The proxy
 is not published to the host.
@@ -463,8 +466,8 @@ marked omitted in capture.
 | `VEILGATED_CONSOLE_ADDR` | no | `127.0.0.1:8081` | HTTPS console and API address |
 | `VEILGATED_CONSOLE_CERT` | no | `config/console.crt` | HTTPS console certificate PEM |
 | `VEILGATED_CONSOLE_KEY` | no | `config/console.key` | Matching HTTPS console private key PEM |
-| `VEILGATED_CONSOLE_USERNAME` | no | — | Console HTTP Basic username |
-| `VEILGATED_CONSOLE_PASSWORD` | no | — | Console HTTP Basic password |
+| `VEILGATED_CONSOLE_USERNAME` | conditional | — | Console HTTP Basic username; required with the password for non-loopback console addresses |
+| `VEILGATED_CONSOLE_PASSWORD` | conditional | — | Console HTTP Basic password; required with the username for non-loopback console addresses |
 | `VEILGATED_FLOW_RETENTION` | no | `1000` | Retained flow limit, 1–100000 |
 | `VEILGATED_DATABASE_URL` | no | in memory | `sqlite:<path>` durable flow store |
 | `VEILGATED_SECRETS_FILE` | no | disabled | Static secret definitions JSON; requires interception |
@@ -497,10 +500,12 @@ uses their filenames in the mounted `/etc/veilgate` config directory. The
 Compose development service runs as UID/GID 1000 so it can read the mode-0600
 keys created by the development container user through `tokyo3_hq_proj`.
 
-Set both console credential variables or neither. Keep the `tokyo3_hq_default`
-management network private and place the console behind an authenticated
-operator gateway. `/healthz` remains unauthenticated on the management
-listener.
+Set both console credential variables when the console address is not
+loopback; a lone variable is invalid. On a loopback address, both may be
+omitted, but the daemon logs that the console is running unauthenticated. Keep
+the `tokyo3_hq_default` management network private and place the console behind
+an authenticated operator gateway. `/healthz` remains unauthenticated on the
+management listener.
 
 ## HTTP surfaces
 

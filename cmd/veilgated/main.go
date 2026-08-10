@@ -20,7 +20,8 @@
 //	VEILGATED_CONSOLE_CERT      HTTPS console certificate PEM (default "config/console.crt").
 //	VEILGATED_CONSOLE_KEY       Matching HTTPS console private key PEM (default "config/console.key").
 //	VEILGATED_CONSOLE_USERNAME  HTTP Basic username for the console. Must be set
-//	                            together with VEILGATED_CONSOLE_PASSWORD.
+//	                            together with VEILGATED_CONSOLE_PASSWORD when
+//	                            VEILGATED_CONSOLE_ADDR is not loopback.
 //	VEILGATED_CONSOLE_PASSWORD  HTTP Basic password for the console.
 //	VEILGATED_FLOW_RETENTION    Number of flows retained (default 1000).
 //	VEILGATED_DATABASE_URL      Optional sqlite:<path> durable flow store. Empty uses
@@ -57,8 +58,11 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/abagile/tokyo3-base/cli"
@@ -188,10 +192,11 @@ func runServe(ctx context.Context) error {
 		return errors.New("VEILGATED_MEDIATION_LIMIT_BYTES must be at least the capture limit and at most 67108864")
 	}
 
+	consoleAddr := envutil.Or("VEILGATED_CONSOLE_ADDR", "127.0.0.1:8081")
 	consoleUser := os.Getenv("VEILGATED_CONSOLE_USERNAME")
 	consolePassword := os.Getenv("VEILGATED_CONSOLE_PASSWORD")
-	if (consoleUser == "") != (consolePassword == "") {
-		return errors.New("VEILGATED_CONSOLE_USERNAME and VEILGATED_CONSOLE_PASSWORD must be set together")
+	if err := validateConsoleAuth(consoleAddr, consoleUser, consolePassword); err != nil {
+		return err
 	}
 
 	proxyCertPath := os.Getenv("VEILGATED_PROXY_CERT")
@@ -316,7 +321,6 @@ func runServe(ctx context.Context) error {
 	}
 
 	proxyAddr := envutil.Or("VEILGATED_ADDR", "127.0.0.1:8080")
-	consoleAddr := envutil.Or("VEILGATED_CONSOLE_ADDR", "127.0.0.1:8081")
 	proxyServer := &http.Server{
 		Addr:              proxyAddr,
 		Handler:           proxyHandler,
@@ -335,11 +339,37 @@ func runServe(ctx context.Context) error {
 		IdleTimeout:       90 * time.Second,
 		MaxHeaderBytes:    1 << 20,
 	}
+	if consoleUser == "" {
+		rt.Log.Warn("console running unauthenticated", "console_addr", consoleAddr, "reason", "loopback listen address")
+	}
 	rt.Log.Info("veilgate starting", "proxy_addr", proxyAddr, "console_addr", consoleAddr, "clients", len(policy.Clients), "observation_clients", observationClientCount(policy))
 	return run.Group(rt.Ctx,
 		run.HTTPServer(proxyServer, 10*time.Second, true),
 		run.HTTPServer(consoleServer, 10*time.Second, true),
 	)
+}
+
+func validateConsoleAuth(addr, username, password string) error {
+	if (username == "") != (password == "") {
+		return errors.New("VEILGATED_CONSOLE_USERNAME and VEILGATED_CONSOLE_PASSWORD must be set together")
+	}
+	if username == "" && !isLoopbackConsoleAddr(addr) {
+		return fmt.Errorf("VEILGATED_CONSOLE_USERNAME and VEILGATED_CONSOLE_PASSWORD are required when VEILGATED_CONSOLE_ADDR %q is not loopback", addr)
+	}
+	return nil
+}
+
+func isLoopbackConsoleAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return false
+	}
+	normalizedHost := strings.ToLower(strings.TrimSuffix(host, "."))
+	if normalizedHost == "localhost" || strings.HasSuffix(normalizedHost, ".localhost") {
+		return true
+	}
+	parsed, err := netip.ParseAddr(host)
+	return err == nil && parsed.Unmap().IsLoopback()
 }
 
 func observationClientCount(policy *config.File) int {
