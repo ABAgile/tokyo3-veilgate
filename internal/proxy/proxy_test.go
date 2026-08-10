@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -9,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -82,12 +84,16 @@ func TestRecordQueueDropsInsteadOfBlocking(t *testing.T) {
 	entered := make(chan struct{}, recordWorkerCount)
 	release := make(chan struct{})
 	var callbacks atomic.Int32
-	h := &Handler{Record: func(context.Context, flow.Flow) {
-		if callbacks.Add(1) <= recordWorkerCount {
-			entered <- struct{}{}
-			<-release
-		}
-	}}
+	var logs bytes.Buffer
+	h := &Handler{
+		Log: slog.New(slog.NewTextHandler(&logs, nil)),
+		Record: func(context.Context, flow.Flow) {
+			if callbacks.Add(1) <= recordWorkerCount {
+				entered <- struct{}{}
+				<-release
+			}
+		},
+	}
 	for range recordQueueCapacity + recordWorkerCount {
 		h.recordFlow(context.Background(), flow.Flow{Host: "example.com"})
 	}
@@ -106,7 +112,47 @@ func TestRecordQueueDropsInsteadOfBlocking(t *testing.T) {
 	if got := h.recordDropped.Load(); got == 0 {
 		t.Fatal("record queue did not report a dropped job")
 	}
+	if !strings.Contains(logs.String(), "flow records dropped under backpressure") {
+		t.Fatalf("drop warning = %q", logs.String())
+	}
 	close(release)
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDeniedRecordWaitsForQueueCapacity(t *testing.T) {
+	entered := make(chan struct{}, recordWorkerCount)
+	release := make(chan struct{})
+	var callbacks atomic.Int32
+	h := &Handler{Record: func(context.Context, flow.Flow) {
+		if callbacks.Add(1) <= recordWorkerCount {
+			entered <- struct{}{}
+			<-release
+		}
+	}}
+	for range recordWorkerCount {
+		h.recordFlow(context.Background(), flow.Flow{Decision: "allowed"})
+	}
+	for range recordWorkerCount {
+		select {
+		case <-entered:
+		case <-time.After(time.Second):
+			t.Fatal("record workers did not start")
+		}
+	}
+	for range recordQueueCapacity {
+		h.recordFlow(context.Background(), flow.Flow{Decision: "allowed"})
+	}
+
+	go func() {
+		time.Sleep(recordDeniedEnqueueTimeout / 4)
+		close(release)
+	}()
+	h.recordFlow(context.Background(), flow.Flow{Decision: "denied"})
+	if got := h.recordDropped.Load(); got != 0 {
+		t.Fatalf("denied record was dropped: %d", got)
+	}
 	if err := h.Close(); err != nil {
 		t.Fatal(err)
 	}

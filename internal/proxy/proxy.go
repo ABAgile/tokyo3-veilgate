@@ -42,6 +42,8 @@ type flowRecordJob struct {
 const (
 	recordQueueCapacity          = 16
 	recordWorkerCount            = 2
+	recordDeniedEnqueueTimeout   = 100 * time.Millisecond
+	recordDropNoticeInterval     = 10 * time.Second
 	recordShutdownTimeout        = 5 * time.Second
 	defaultSessionIdleTimeout    = 5 * time.Minute
 	defaultSessionMaxDuration    = 30 * time.Minute
@@ -195,13 +197,15 @@ type Handler struct {
 	transportMu sync.Mutex
 	transports  map[upstreamTransportKey]*cachedUpstreamTransport
 
-	recordMu      sync.Mutex
-	recordClosed  bool
-	recordQueue   chan flowRecordJob
-	recordContext context.Context
-	recordCancel  context.CancelFunc
-	recordWG      sync.WaitGroup
-	recordDropped atomic.Uint64
+	recordMu           sync.Mutex
+	recordClosed       bool
+	recordQueue        chan flowRecordJob
+	recordContext      context.Context
+	recordCancel       context.CancelFunc
+	recordWG           sync.WaitGroup
+	recordSubmitWG     sync.WaitGroup
+	recordDropped      atomic.Uint64
+	recordDropNoticeAt atomic.Int64
 }
 
 func (h *Handler) sessionIdleTimeout() time.Duration {
@@ -362,13 +366,49 @@ func (h *Handler) recordFlow(_ context.Context, item flow.Flow) {
 			})
 		}
 	}
-	job := flowRecordJob{ctx: h.recordContext, item: item}
-	select {
-	case h.recordQueue <- job:
-	default:
-		h.recordDropped.Add(1)
-	}
+	queue := h.recordQueue
+	recordContext := h.recordContext
+	h.recordSubmitWG.Add(1)
 	h.recordMu.Unlock()
+	defer h.recordSubmitWG.Done()
+
+	job := flowRecordJob{ctx: recordContext, item: item}
+	dropped := false
+	if item.Decision == "denied" {
+		timer := time.NewTimer(recordDeniedEnqueueTimeout)
+		select {
+		case queue <- job:
+			timer.Stop()
+		case <-timer.C:
+			dropped = true
+		}
+	} else {
+		select {
+		case queue <- job:
+		default:
+			dropped = true
+		}
+	}
+	if dropped {
+		h.recordDropped.Add(1)
+		h.noteRecordDrop()
+	}
+}
+
+func (h *Handler) noteRecordDrop() {
+	now := time.Now().UnixNano()
+	last := h.recordDropNoticeAt.Load()
+	if last != 0 && now-last < int64(recordDropNoticeInterval) {
+		return
+	}
+	if !h.recordDropNoticeAt.CompareAndSwap(last, now) {
+		return
+	}
+	log := h.Log
+	if log == nil {
+		log = slog.Default()
+	}
+	log.Warn("flow records dropped under backpressure", "count", h.recordDropped.Load())
 }
 
 func (h *Handler) recordFlowJob(log *slog.Logger, job flowRecordJob) {

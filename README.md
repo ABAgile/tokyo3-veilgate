@@ -28,6 +28,8 @@ The current development stage provides a deliberately narrow security baseline:
 - bounded sanitized query, body, and WebSocket text capture plus metadata-only
   binary WebSocket records with SQLite persistence or in-memory fallback;
 - read-only filtered web console with live SSE and policy-decision traces;
+- bounded asynchronous flow recording with runtime backpressure warnings and a
+  short priority wait for denied decisions;
 - optional NATS JetStream audit publication through `tokyo3-base`.
 
 Request replay and policy editing are **not implemented**. WebSocket mediation

@@ -112,8 +112,8 @@ func (h *Handler) evictOldestTransportLocked() {
 	}
 }
 
-// Close cancels flow recording, waits briefly for workers, and releases all
-// cached idle upstream connections.
+// Close finishes pending flow submissions, waits briefly for workers, and
+// releases all cached idle upstream connections.
 func (h *Handler) Close() error {
 	h.recordMu.Lock()
 	var recordCancel context.CancelFunc
@@ -122,11 +122,14 @@ func (h *Handler) Close() error {
 		h.recordClosed = true
 		recordCancel = h.recordCancel
 		recordQueue = h.recordQueue
-		dropped := h.recordDropped.Load()
+		h.recordMu.Unlock()
+		// A denied record may be waiting for queue capacity. Wait for all
+		// producers before closing the channel so that send remains safe.
+		h.recordSubmitWG.Wait()
 		if recordQueue != nil {
 			close(recordQueue)
 		}
-		h.recordMu.Unlock()
+		dropped := h.recordDropped.Load()
 		if dropped > 0 {
 			log := h.Log
 			if log == nil {
