@@ -308,11 +308,19 @@ second-level sub-tabs so operators can compare metadata and payloads
 independently; the Headers sub-tab is selected by default. The request Headers
 sub-tab also carries the bounded sanitized query value. The Body sub-tabs show
 supported textual request and response bodies. The WebSocket tab lists text
-messages and metadata-only binary WebSocket records. Formatted HTML, JSON,
-JSONL, Server-Sent Events (text/event-stream), and Form URL-Encoded (application/x-www-form-urlencoded) bodies open prettified with the documented syntax-key/string/number/
-literal/markup highlighting and a Raw/Prettify toggle in both light and dark
-mode. Binary records show direction, decoded byte size, and SHA-256; binary
-bytes and Base64 are never retained. Captures use `[secret:name]` markers and
+messages and metadata-only binary WebSocket records. Text streams have a compact
+message navigator with chronological message numbers, direction and event-type
+filters, text search, previous/next match controls, and a current/total count.
+High-volume contiguous JSON delta events may be summarized by stable response and
+item identifiers, but every original message remains available in an expandable
+chronological raw view. Formatted HTML, JSON, JSONL, Server-Sent Events
+(text/event-stream), and Form URL-Encoded (application/x-www-form-urlencoded)
+bodies open prettified with the documented syntax-key/string/number/literal/
+markup highlighting and a Raw/Prettify toggle in both light and dark mode.
+Long or multiline JSON string values keep their lexical representation in the
+highlighted code and additionally expose collapsed, text-only readable previews
+with their JSON path and line count. Binary records show direction, decoded
+byte size, and SHA-256; binary bytes and Base64 are never retained. Captures use `[secret:name]` markers and
 must never show proxy credentials, credential-bearing header values,
 placeholders, or post-substitution secret values. Unsupported HTTP binary
 content is identified as omitted rather than decoded or rendered. The detail
@@ -384,10 +392,15 @@ a cyan leading rule.
   Query and body content uses the code typography in a bordered,
   preformatted card with wrapping and selectable text. Each section has a
   visible content-type label and an explicit empty, omitted, or truncated state.
-  Text is inserted as text content, never interpreted as markup. WebSocket
-  messages identify client-to-upstream or upstream-to-client direction and
-  retain chronological order; binary messages show metadata only. Built-in
-  display formatter plugins recognize
+  Text is inserted as text content, never interpreted as markup. Multiline JSON
+  string previews decode display-only escape sequences without changing the
+  retained or Raw representation; incomplete or truncated string tokens do not
+  produce a preview. WebSocket messages identify client-to-upstream or
+  upstream-to-client direction and retain chronological order; binary messages
+  show metadata only. The WebSocket navigator filters and searches the retained
+  sanitized text, labels JSON event types, summarizes only contiguous compatible
+  delta events, and keeps each source message expandable for exact examination.
+  Built-in display formatter plugins recognize
   HTML, JSON, JSONL/NDJSON, Server-Sent Events (text/event-stream), and Form URL-Encoded (application/x-www-form-urlencoded) by media type with conservative content
   detection as a fallback. Supported captures open prettified for readability
   and provide a secondary Raw/Prettify toggle; formatting changes display only,
@@ -421,6 +434,10 @@ relying on column position alone.
   `[secret:name]` markers.
 - **Do** let operators switch formatted HTML/JSON/JSONL/SSE/Form URL-Encoded captures back to their
   exact retained raw representation.
+- **Do** provide readable previews for long or multiline JSON strings without
+  replacing the lexical JSON code view.
+- **Do** let operators search, filter, summarize, and expand high-volume
+  WebSocket streams without losing chronological raw messages.
 - **Do** keep the flow list at full height and anchor the detail drawer to its
   row so the operator never loses their place, including during live arrivals
   and pagination.

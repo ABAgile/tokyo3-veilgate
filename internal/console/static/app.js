@@ -475,15 +475,7 @@
       appendCaptureSection(responseBody, "Response body", capture.response_body.content_type, capture.response_body.text, capture.response_body.omitted);
       respBodyCount++;
     }
-    for (const [index, message] of (capture.websocket_messages || []).entries()) {
-      const direction = message.direction === "client-to-upstream" ? "Client → upstream" : "Upstream → client";
-      if (message.kind === "binary") {
-        appendCaptureSection(websocket, `WebSocket message ${index + 1} · ${direction}`, "binary metadata", `Size: ${bytes(message.size || 0)}\nSHA-256: ${message.sha256 || "Unavailable"}`, false);
-      } else {
-        appendCaptureSection(websocket, `WebSocket message ${index + 1} · ${direction}`, "text frame", message.text, false);
-      }
-      websocketCount++;
-    }
+    websocketCount += appendWebSocketCapture(websocket, capture.websocket_messages || []);
     if (capture.truncated) {
       appendCaptureSection(requestBody, "Capture limit reached", "", "Additional headers, body content, or WebSocket messages were not retained.", false);
       reqBodyCount++;
@@ -498,6 +490,207 @@
   function setPanelEmpty(container, count) {
     const note = container.parentElement.querySelector(".capture-empty");
     if (note) note.hidden = count > 0;
+  }
+
+  function appendWebSocketCapture(container, messages) {
+    if (!messages.length) return 0;
+    const entries = buildWebSocketEntries(messages);
+    const navigator = document.createElement("div");
+    const filterRow = document.createElement("div");
+    const actions = document.createElement("div");
+    const status = document.createElement("span");
+    const direction = websocketFilter("Direction", [
+      {value: "", text: "All directions"},
+      {value: "client-to-upstream", text: "Client → upstream"},
+      {value: "upstream-to-client", text: "Upstream → client"}
+    ]);
+    const eventTypes = new Map();
+    for (const message of messages) {
+      const eventType = websocketMessageInfo(message).eventType;
+      eventTypes.set(eventType, (eventTypes.get(eventType) || 0) + 1);
+    }
+    const eventType = websocketFilter("Event type", [
+      {value: "", text: "All event types"},
+      ...eventTypes.entries().map(([value, count]) => ({value, text: `${value} (${count})`}))
+    ]);
+    const search = document.createElement("label");
+    const searchInput = document.createElement("input");
+    const previous = document.createElement("button");
+    const next = document.createElement("button");
+    const list = document.createElement("div");
+    const rendered = [];
+    let matches = [];
+    let currentMatch = -1;
+
+    navigator.className = "websocket-navigator";
+    filterRow.className = "websocket-filter-row";
+    actions.className = "websocket-navigator-actions";
+    status.className = "websocket-navigator-status";
+    status.setAttribute("role", "status");
+    status.setAttribute("aria-live", "polite");
+    search.className = "websocket-search";
+    search.textContent = "Search";
+    searchInput.type = "search";
+    searchInput.placeholder = "Event type or message text";
+    searchInput.autocomplete = "off";
+    search.appendChild(searchInput);
+    previous.type = "button";
+    previous.className = "secondary websocket-nav-button";
+    previous.textContent = "Previous match";
+    next.type = "button";
+    next.className = "secondary websocket-nav-button";
+    next.textContent = "Next match";
+    list.className = "websocket-message-list";
+
+    filterRow.append(direction.label, eventType.label, search);
+    actions.append(previous, next, status);
+    navigator.append(filterRow, actions);
+    container.append(navigator, list);
+    for (const entry of entries) {
+      entry.element = renderWebSocketEntry(list, entry);
+      rendered.push(entry);
+    }
+
+    const updateStatus = () => {
+      const visibleMessages = matches.reduce((total, entry) => total + entry.messages.length, 0);
+      const matchLabel = matches.length ? ` · ${matches.length} ${matches.length === 1 ? "entry" : "entries"}` : "";
+      const currentLabel = currentMatch >= 0 ? ` · Match ${currentMatch + 1} of ${matches.length}` : "";
+      status.textContent = `Showing ${visibleMessages} of ${messages.length} messages${matchLabel}${currentLabel}`;
+      previous.disabled = matches.length === 0;
+      next.disabled = matches.length === 0;
+    };
+    const refresh = () => {
+      const query = searchInput.value.trim().toLowerCase();
+      matches = [];
+      currentMatch = -1;
+      for (const entry of rendered) {
+        const visible = (!direction.control.value || entry.directionValue === direction.control.value) &&
+          (!eventType.control.value || entry.eventType === eventType.control.value) &&
+          (!query || entry.searchText.includes(query));
+        entry.element.hidden = !visible;
+        entry.element.classList.remove("navigator-current");
+        if (visible) matches.push(entry);
+      }
+      updateStatus();
+    };
+    const jump = step => {
+      if (!matches.length) return;
+      const start = currentMatch < 0 ? (step > 0 ? -1 : 0) : currentMatch;
+      currentMatch = (start + step + matches.length) % matches.length;
+      for (const entry of rendered) entry.element.classList.remove("navigator-current");
+      const entry = matches[currentMatch];
+      entry.element.classList.add("navigator-current");
+      entry.element.scrollIntoView?.({block: "nearest", behavior: "auto"});
+      entry.element.focus({preventScroll: true});
+      updateStatus();
+    };
+    direction.control.addEventListener("change", refresh);
+    eventType.control.addEventListener("change", refresh);
+    searchInput.addEventListener("input", refresh);
+    previous.addEventListener("click", () => jump(-1));
+    next.addEventListener("click", () => jump(1));
+    refresh();
+    return messages.length;
+  }
+
+  function websocketFilter(name, options) {
+    const label = document.createElement("label");
+    const control = document.createElement("select");
+    label.textContent = name;
+    for (const option of options) {
+      const element = document.createElement("option");
+      element.value = option.value;
+      element.textContent = option.text;
+      control.appendChild(element);
+    }
+    label.appendChild(control);
+    return {label, control};
+  }
+
+  function buildWebSocketEntries(messages) {
+    const entries = [];
+    let current = null;
+    for (const [index, message] of messages.entries()) {
+      const info = websocketMessageInfo(message);
+      if (info.groupKey && current && current.groupKey === info.groupKey) {
+        current.messages.push({index, message, info});
+        current.deltaText += info.delta;
+        current.searchText += ` ${message.text || ""}`.toLowerCase();
+        continue;
+      }
+      current = {
+        direction: info.direction,
+        directionValue: message.direction === "client-to-upstream" ? "client-to-upstream" : "upstream-to-client",
+        eventType: info.eventType,
+        groupKey: info.groupKey,
+        grouped: Boolean(info.groupKey),
+        deltaText: info.delta || "",
+        messages: [{index, message, info}],
+        searchText: `${info.eventType} ${message.text || ""}`.toLowerCase(),
+        element: null
+      };
+      entries.push(current);
+      if (!info.groupKey) current = null;
+    }
+    for (const entry of entries) {
+      if (entry.messages.length < 2) entry.grouped = false;
+    }
+    return entries;
+  }
+
+  function websocketMessageInfo(message) {
+    const direction = message.direction === "client-to-upstream" ? "Client → upstream" : "Upstream → client";
+    if (message.kind === "binary") return {direction, eventType: "Binary metadata", delta: "", groupKey: ""};
+    const raw = message.text || "";
+    let value = null;
+    try { value = JSON.parse(raw); } catch {}
+    const eventType = value && typeof value.type === "string" && value.type ? value.type : "Text frame";
+    const identityFields = ["response_id", "item_id", "output_index", "content_index", "call_id"];
+    const identity = identityFields
+      .filter(field => value && value[field] !== undefined && value[field] !== null && value[field] !== "")
+      .map(field => [field, value[field]]);
+    const isDelta = value && typeof value.delta === "string" && /\.delta$/i.test(eventType) &&
+      !/(^|[._])audio\.delta$/i.test(eventType) && identity.length > 0;
+    const groupKey = isDelta ? `${message.direction}|${eventType}|${JSON.stringify(identity)}` : "";
+    return {direction, eventType, delta: isDelta ? value.delta : "", groupKey};
+  }
+
+  function renderWebSocketEntry(container, entry) {
+    const wrapper = document.createElement("div");
+    const first = entry.messages[0].index + 1;
+    const last = entry.messages[entry.messages.length - 1].index + 1;
+    const messageRange = first === last ? `#${first}` : `#${first}–#${last}`;
+    wrapper.className = "websocket-entry";
+    wrapper.tabIndex = -1;
+    wrapper.setAttribute("aria-label", `${entry.grouped ? "WebSocket messages" : "WebSocket message"} ${messageRange} · ${entry.direction} · ${entry.eventType}`);
+    wrapper.dataset.firstMessage = String(first);
+    wrapper.dataset.lastMessage = String(last);
+    if (entry.grouped) {
+      appendCaptureSection(wrapper, `WebSocket messages #${first}–${last} · ${entry.direction} · ${entry.eventType}`, "assembled text delta", entry.deltaText, false);
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      const rawList = document.createElement("div");
+      details.className = "websocket-raw";
+      rawList.className = "websocket-raw-list";
+      summary.textContent = `Show ${entry.messages.length} original messages (#${first}–#${last})`;
+      for (const record of entry.messages) appendWebSocketMessage(rawList, record.index, record.message, record.info);
+      details.append(summary, rawList);
+      wrapper.appendChild(details);
+    } else {
+      const record = entry.messages[0];
+      appendWebSocketMessage(wrapper, record.index, record.message, record.info);
+    }
+    container.appendChild(wrapper);
+    return wrapper;
+  }
+
+  function appendWebSocketMessage(container, index, message, info) {
+    const title = `WebSocket message #${index + 1} · ${info.direction} · ${info.eventType}`;
+    if (message.kind === "binary") {
+      appendCaptureSection(container, title, "binary metadata", `Size: ${bytes(message.size || 0)}\nSHA-256: ${message.sha256 || "Unavailable"}`, false);
+    } else {
+      appendCaptureSection(container, title, "text frame", message.text, false);
+    }
   }
 
   function appendHeaderSection(container, title, headers) {
@@ -533,6 +726,7 @@
     headingRow.appendChild(heading);
     const raw = text || "";
     const formatted = omitted ? null : window.VeilgateCaptureFormatters.format(contentType, raw);
+    const readableStrings = formatted?.previews?.length ? appendReadableStringPreviews(formatted.previews) : null;
     if (formatted) {
       const toggle = document.createElement("button");
       toggle.type = "button";
@@ -544,6 +738,7 @@
         toggle.setAttribute("aria-pressed", String(showFormatted));
         toggle.textContent = showFormatted ? "Show raw" : "Prettify";
         meta.textContent = `${contentType || "Content type unavailable"} · ${showFormatted ? formatted.label : "Raw"}`;
+        if (readableStrings) readableStrings.hidden = !showFormatted;
         renderCaptureText(pre, showFormatted ? formatted.text : (raw || "Empty payload"), showFormatted ? formatted.language : "");
       });
       headingRow.appendChild(toggle);
@@ -552,7 +747,30 @@
     const displayed = omitted ? "Content omitted because its media type is unsupported or binary." : (formatted?.text || raw || "Empty payload");
     renderCaptureText(pre, displayed, omitted ? "" : (formatted?.language || ""));
     section.append(headingRow, meta, pre);
+    if (readableStrings) section.appendChild(readableStrings);
     container.appendChild(section);
+  }
+
+  function appendReadableStringPreviews(previews) {
+    const details = document.createElement("details");
+    const summary = document.createElement("summary");
+    const list = document.createElement("div");
+    details.className = "readable-strings";
+    list.className = "readable-string-list";
+    summary.textContent = `Readable string values (${previews.length})`;
+    for (const preview of previews) {
+      const item = document.createElement("div");
+      const label = document.createElement("p");
+      const pre = document.createElement("pre");
+      item.className = "readable-string";
+      label.className = "readable-string-label";
+      label.textContent = `${preview.path} · ${preview.lines} ${preview.lines === 1 ? "line" : "lines"} · ${preview.text.length} characters`;
+      pre.textContent = preview.text;
+      item.append(label, pre);
+      list.appendChild(item);
+    }
+    details.append(summary, list);
+    return details;
   }
 
   function renderCaptureText(pre, text, language) {

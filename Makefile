@@ -94,6 +94,9 @@ gen-cert: gen-ca gen-console-cert
 check:
 	gofmt -s -w .
 	$(GO) mod tidy
+	node --check internal/console/static/app.js
+	node --check internal/console/static/formatters.js
+	node --test internal/console/formatters_test.mjs
 	$(GO) test ./... -count=1
 	$(GO) vet ./...
 	staticcheck ./...

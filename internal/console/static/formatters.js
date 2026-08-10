@@ -2,6 +2,8 @@
   "use strict";
 
   const jsonlTypes = new Set(["application/jsonl", "application/jsonlines", "application/ndjson", "application/x-ndjson"]);
+  const readableStringLength = 160;
+  const maxReadableStringPreviews = 24;
   const plugins = [
     {
       label: "Formatted Form Data",
@@ -18,6 +20,7 @@
     {
       label: "Formatted JSONL",
       language: "json",
+      jsonLines: true,
       matches: (mediaType, raw) => jsonlTypes.has(mediaType) || looksLikeJSONL(raw.trim()),
       format: prettyJSONL
     },
@@ -41,12 +44,54 @@
     for (const plugin of plugins) {
       if (!plugin.matches(mediaType, raw)) continue;
       try {
-        return {label: plugin.label, language: plugin.language, text: plugin.format(raw)};
+        const result = {label: plugin.label, language: plugin.language, text: plugin.format(raw)};
+        if (plugin.language === "json") result.previews = readableJSONStrings(raw, plugin.jsonLines);
+        return result;
       } catch {
         return null;
       }
     }
     return null;
+  }
+
+  function readableJSONStrings(raw, jsonLines) {
+    const sources = jsonLines
+      ? raw.split(/\r?\n/).map((line, index) => line.trim() ? {text: line, path: `line ${index + 1}`} : null).filter(Boolean)
+      : [{text: raw, path: "$"}];
+    const previews = [];
+    for (const source of sources) {
+      let value;
+      try {
+        value = JSON.parse(source.text);
+      } catch {
+        continue;
+      }
+      collectReadableJSONStrings(value, source.path, previews);
+      if (previews.length >= maxReadableStringPreviews) break;
+    }
+    return previews;
+  }
+
+  function collectReadableJSONStrings(value, path, previews, depth = 0) {
+    if (previews.length >= maxReadableStringPreviews || depth > 64) return;
+    if (typeof value === "string") {
+      const lines = value.split(/\r\n|\r|\n/).length;
+      if (lines > 1 || value.length >= readableStringLength) previews.push({path, text: value, lines});
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((child, index) => collectReadableJSONStrings(child, `${path}[${index}]`, previews, depth + 1));
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    for (const [key, child] of Object.entries(value)) {
+      collectReadableJSONStrings(child, jsonPath(path, key), previews, depth + 1);
+      if (previews.length >= maxReadableStringPreviews) return;
+    }
+  }
+
+  function jsonPath(parent, key) {
+    return /^[A-Za-z_$][\w$]*$/.test(key) ? `${parent}.${key}` : `${parent}[${JSON.stringify(key)}]`;
   }
 
   function looksLikeJSONL(raw) {
@@ -67,10 +112,11 @@
     return raw.split(/\r?\n/).filter(line => line.trim()).map(line => prettyJSON(line)).join("\n");
   }
 
-  // This lexical formatter validates with JSON.parse but emits the original
-  // number and string tokens, avoiding JavaScript numeric reserialization.
+  // This lexical formatter keeps working for bounded captures that end in the
+  // middle of a JSON value. It emits the original number and string tokens,
+  // avoiding JavaScript numeric reserialization while retaining formatting and
+  // highlighting for truncated JSON.
   function prettyJSON(raw) {
-    JSON.parse(raw);
     let output = "";
     let depth = 0;
     let inString = false;
@@ -105,7 +151,7 @@
           output += character + "\n" + indentation();
         }
       } else if (character === "}" || character === "]") {
-        depth--;
+        depth = Math.max(0, depth - 1);
         output += "\n" + indentation() + character;
       } else if (character === ",") {
         output += ",\n" + indentation();
@@ -381,5 +427,5 @@
     return tokens;
   }
 
-  globalThis.VeilgateCaptureFormatters = Object.freeze({format, highlight, prettyJSON, prettyJSONL, prettySSE, prettyFormURLEncoded});
+  globalThis.VeilgateCaptureFormatters = Object.freeze({format, highlight, prettyJSON, prettyJSONL, prettySSE, prettyFormURLEncoded, readableJSONStrings});
 })();
