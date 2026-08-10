@@ -8,6 +8,7 @@ The current development stage provides a deliberately narrow security baseline:
 - HTTPS-only forward proxy access with no plaintext proxy listener;
 - controlled HTTPS interception for HTTP/2 and HTTP/1.1, with an opaque
   fallback when no interception CA is configured;
+- explicit per-CONNECT HTTP/2 stream caps sized against the mediation limit;
 - lifecycle-scoped bearer or Basic proxy credentials;
 - per-client hostname and port allowlists;
 - DNS resolution followed by public-address validation and IP-pinned dialing;
@@ -480,7 +481,7 @@ marked omitted in capture.
 | `VEILGATED_SESSION_MAX_DURATION` | no | `30m` | Maximum proxy request/session lifetime; at most 168h |
 | `VEILGATED_UPSTREAM_RESPONSE_HEADER_TIMEOUT` | no | `30s` | Maximum wait for upstream response headers; 1s–10m |
 | `VEILGATED_CAPTURE_LIMIT_BYTES` | no | `262144` | Maximum retained bytes per capture section; 1024–4194304 |
-| `VEILGATED_MEDIATION_LIMIT_BYTES` | no | `4194304` | Maximum decoded body or WebSocket message; at least capture limit, at most 67108864 |
+| `VEILGATED_MEDIATION_LIMIT_BYTES` | no | `4194304` | Maximum decoded body or WebSocket message; also sizes the intercepted HTTP/2 stream cap; at least capture limit, at most 67108864 |
 | `VEILGATED_INTERCEPT_CA_CERT` | no | disabled | Interception CA certificate PEM |
 | `VEILGATED_INTERCEPT_CA_KEY` | no | disabled | Matching interception CA key PEM |
 | `VEILGATED_PROXY_CERT` | yes | — | HTTPS proxy server certificate PEM |

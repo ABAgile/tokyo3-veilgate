@@ -14,9 +14,30 @@ import (
 	"github.com/abagile/veilgate/internal/flow"
 )
 
+const (
+	interceptedHTTP2BufferBudget = int64(256 << 20)
+	maxInterceptedHTTP2Streams   = int64(64)
+)
+
+func (h *Handler) interceptedHTTP2MaxConcurrentStreams() uint32 {
+	// A mediated stream can retain a decoded request and response up to the
+	// mediation limit. Reserve two limits per stream and cap the total budget
+	// so the HTTP/2 default of 250 cannot turn one CONNECT session into a large
+	// unbounded allocation.
+	streams := interceptedHTTP2BufferBudget / h.mediationLimit() / 2
+	streams = max(streams, int64(1))
+	streams = min(streams, maxInterceptedHTTP2Streams)
+	return uint32(streams)
+}
+
 func (h *Handler) interceptHTTP2(conn *tls.Conn, outer *http.Request, identity *config.Client, host string, port int, sessionID string) (int, int64, int64, string) {
 	var totalSent, totalReceived atomic.Int64
-	server := &http2.Server{MaxReadFrameSize: 1 << 20, MaxDecoderHeaderTableSize: 4096, MaxEncoderHeaderTableSize: 4096}
+	server := &http2.Server{
+		MaxConcurrentStreams:      h.interceptedHTTP2MaxConcurrentStreams(),
+		MaxReadFrameSize:          1 << 20,
+		MaxDecoderHeaderTableSize: 4096,
+		MaxEncoderHeaderTableSize: 4096,
+	}
 	server.ServeConn(conn, &http2.ServeConnOpts{
 		Context: outer.Context(),
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
