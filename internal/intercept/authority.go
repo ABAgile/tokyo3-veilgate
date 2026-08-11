@@ -5,6 +5,7 @@
 package intercept
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -46,13 +47,13 @@ func DefaultProxySANs() []string {
 type cachedCertificate struct {
 	certificate *tls.Certificate
 	notAfter    time.Time
+	lastUsed    time.Time
 }
 
 // Authority signs and caches interception certificates in memory.
 type Authority struct {
 	certificate *x509.Certificate
 	signer      crypto.Signer
-	leafKey     *ecdsa.PrivateKey
 
 	mu    sync.Mutex
 	cache map[string]cachedCertificate
@@ -106,17 +107,12 @@ func Parse(certPEM, keyPEM []byte) (*Authority, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal interception certificate public key: %w", err)
 	}
-	if !cryptoEqual(publicDER, certPublicDER) {
+	if !bytes.Equal(publicDER, certPublicDER) {
 		return nil, errors.New("interception CA certificate and private key do not match")
-	}
-	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("generate interception leaf key: %w", err)
 	}
 	return &Authority{
 		certificate: certificate,
 		signer:      key,
-		leafKey:     leafKey,
 		cache:       make(map[string]cachedCertificate),
 		now:         time.Now,
 	}, nil
@@ -136,17 +132,6 @@ func parsePrivateKey(der []byte) (crypto.Signer, error) {
 		return key, nil
 	}
 	return nil, errors.New("parse interception CA private key: unsupported PKCS#8, PKCS#1, or EC key")
-}
-
-func cryptoEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	var different byte
-	for i := range a {
-		different |= a[i] ^ b[i]
-	}
-	return different == 0
 }
 
 // TLSConfig builds a server config that requires the ClientHello SNI to match
@@ -175,6 +160,8 @@ func (a *Authority) certificateFor(host string) (*tls.Certificate, error) {
 	defer a.mu.Unlock()
 	now := a.now()
 	if cached, ok := a.cache[host]; ok && now.Add(5*time.Minute).Before(cached.notAfter) {
+		cached.lastUsed = now
+		a.cache[host] = cached
 		return cached.certificate, nil
 	}
 	serial, err := randomSerial()
@@ -197,7 +184,11 @@ func (a *Authority) certificateFor(host string) (*tls.Certificate, error) {
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
-	der, err := x509.CreateCertificate(rand.Reader, template, a.certificate, &a.leafKey.PublicKey, a.signer)
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generate interception leaf key: %w", err)
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, a.certificate, &leafKey.PublicKey, a.signer)
 	if err != nil {
 		return nil, fmt.Errorf("sign interception certificate for %s: %w", host, err)
 	}
@@ -207,7 +198,7 @@ func (a *Authority) certificateFor(host string) (*tls.Certificate, error) {
 	}
 	certificate := &tls.Certificate{
 		Certificate: [][]byte{der, a.certificate.Raw},
-		PrivateKey:  a.leafKey,
+		PrivateKey:  leafKey,
 		Leaf:        leaf,
 	}
 	if len(a.cache) >= maxCachedCertificates {
@@ -217,9 +208,20 @@ func (a *Authority) certificateFor(host string) (*tls.Certificate, error) {
 			}
 		}
 	}
-	if len(a.cache) < maxCachedCertificates {
-		a.cache[host] = cachedCertificate{certificate: certificate, notAfter: notAfter}
+	if len(a.cache) >= maxCachedCertificates {
+		var oldestName string
+		var oldest cachedCertificate
+		for name, cached := range a.cache {
+			if oldestName == "" || cached.lastUsed.Before(oldest.lastUsed) ||
+				cached.lastUsed.Equal(oldest.lastUsed) && name < oldestName {
+				oldestName, oldest = name, cached
+			}
+		}
+		if oldestName != "" {
+			delete(a.cache, oldestName)
+		}
 	}
+	a.cache[host] = cachedCertificate{certificate: certificate, notAfter: notAfter, lastUsed: now}
 	return certificate, nil
 }
 

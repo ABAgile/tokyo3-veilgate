@@ -5,9 +5,11 @@ import (
 	"crypto"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestGenerateLoadAndIssue(t *testing.T) {
@@ -144,6 +146,102 @@ func TestGenerateProxyCertificate(t *testing.T) {
 	}
 	if !bytes.Equal(afterCert, beforeCert) || !bytes.Equal(afterKey, beforeKey) {
 		t.Fatal("existing proxy material changed")
+	}
+}
+
+func TestIssuedLeavesUseDistinctKeys(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "ca.crt")
+	keyPath := filepath.Join(dir, "ca.key")
+	if err := Generate(certPath, keyPath); err != nil {
+		t.Fatal(err)
+	}
+	authority, err := Load(certPath, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := authority.certificateFor("one.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := authority.certificateFor("two.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstSigner, ok := first.PrivateKey.(crypto.Signer)
+	if !ok {
+		t.Fatal("first leaf key is not a signer")
+	}
+	secondSigner, ok := second.PrivateKey.(crypto.Signer)
+	if !ok {
+		t.Fatal("second leaf key is not a signer")
+	}
+	firstDER, err := x509.MarshalPKIXPublicKey(firstSigner.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondDER, err := x509.MarshalPKIXPublicKey(secondSigner.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(firstDER, secondDER) {
+		t.Fatal("different interception leaves share a private key")
+	}
+	cached, err := authority.certificateFor("one.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cachedSigner, ok := cached.PrivateKey.(crypto.Signer)
+	if !ok {
+		t.Fatal("cached leaf key is not a signer")
+	}
+	cachedDER, err := x509.MarshalPKIXPublicKey(cachedSigner.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(firstDER, cachedDER) {
+		t.Fatal("cached interception leaf was re-keyed")
+	}
+}
+
+func TestLeafCacheEvictsLeastRecentlyUsed(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "ca.crt")
+	keyPath := filepath.Join(dir, "ca.key")
+	if err := Generate(certPath, keyPath); err != nil {
+		t.Fatal(err)
+	}
+	authority, err := Load(certPath, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := authority.certificateFor("oldest.example"); err != nil {
+		t.Fatal(err)
+	}
+	cached := authority.cache["oldest.example"]
+	cached.lastUsed = time.Unix(0, 0)
+	authority.cache["oldest.example"] = cached
+	for index := 1; index < maxCachedCertificates; index++ {
+		authority.cache[fmt.Sprintf("cached-%04d.example", index)] = cachedCertificate{
+			certificate: cached.certificate,
+			notAfter:    time.Now().Add(time.Hour),
+			lastUsed:    time.Unix(0, int64(index)),
+		}
+	}
+	if len(authority.cache) != maxCachedCertificates {
+		t.Fatalf("cache size = %d, want %d", len(authority.cache), maxCachedCertificates)
+	}
+	if _, err := authority.certificateFor("new.example"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := authority.cache["oldest.example"]; ok {
+		t.Fatal("least-recently-used leaf was not evicted")
+	}
+	if _, ok := authority.cache["new.example"]; !ok {
+		t.Fatal("new leaf was not cached")
+	}
+	if len(authority.cache) != maxCachedCertificates {
+		t.Fatalf("cache size after eviction = %d, want %d", len(authority.cache), maxCachedCertificates)
 	}
 }
 
