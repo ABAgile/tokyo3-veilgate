@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"unicode"
+
+	"github.com/abagile/veilgate/internal/hostpattern"
 )
 
 // File is the on-disk secret-broker configuration.
@@ -288,26 +290,9 @@ func validName(name string) bool {
 }
 
 func normalizePattern(pattern string) (string, error) {
-	pattern = strings.ToLower(strings.TrimSpace(strings.TrimSuffix(pattern, ".")))
-	host := strings.TrimPrefix(pattern, "*.")
-	if host == "" || strings.ContainsAny(host, "*/:@") || strings.Contains(host, "..") {
-		return "", fmt.Errorf("invalid host pattern %q", pattern)
-	}
-	if strings.HasPrefix(pattern, "*.") {
-		return "*." + host, nil
-	}
-	return host, nil
+	return hostpattern.Normalize(pattern)
 }
 
 func matchesHost(patterns []string, host string) bool {
-	host = strings.ToLower(strings.TrimSuffix(host, "."))
-	for _, pattern := range patterns {
-		if pattern == host {
-			return true
-		}
-		if suffix, ok := strings.CutPrefix(pattern, "*."); ok && strings.HasSuffix(host, "."+suffix) {
-			return true
-		}
-	}
-	return false
+	return hostpattern.Matches(patterns, host)
 }

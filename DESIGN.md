@@ -389,6 +389,11 @@ a cyan leading rule.
   metadata. Sanitized request and response headers appear as name/value rows;
   authentication, cookie, token, API-key, credential, and secret values show
   `[redacted]`, while configured material elsewhere shows `[secret:name]`.
+  When gateway mediation substitutes a JSON request value, the forwarded body
+  is intentionally parsed and re-marshaled; key order, duplicate keys, and
+  HTML-sensitive escaping may change, and request-body signatures may no
+  longer verify. Integrity headers are removed rather than presented as
+  trustworthy after transformation.
   Query and body content uses the code typography in a bordered,
   preformatted card with wrapping and selectable text. Each section has a
   visible content-type label and an explicit empty, omitted, or truncated state.

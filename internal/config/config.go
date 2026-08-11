@@ -12,6 +12,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+
+	"github.com/abagile/veilgate/internal/hostpattern"
 )
 
 // File is the on-disk client policy document.
@@ -102,37 +104,11 @@ func (f *File) Validate() error {
 }
 
 func normalizePattern(pattern string) (string, error) {
-	pattern = strings.ToLower(strings.TrimSpace(strings.TrimSuffix(pattern, ".")))
-	host := strings.TrimPrefix(pattern, "*.")
-	if host == "" || strings.Contains(host, "*") || !validHostname(host) {
-		return "", fmt.Errorf("invalid host pattern %q", pattern)
-	}
-	if strings.HasPrefix(pattern, "*.") {
-		return "*." + host, nil
-	}
-	return host, nil
+	return hostpattern.Normalize(pattern)
 }
 
 func validHostname(host string) bool {
-	if len(host) > 253 || strings.ContainsAny(host, ":/@") {
-		return false
-	}
-	for _, r := range host {
-		if r > 127 {
-			return false
-		}
-	}
-	for label := range strings.SplitSeq(host, ".") {
-		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return false
-		}
-		for _, r := range label {
-			if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' {
-				return false
-			}
-		}
-	}
-	return true
+	return hostpattern.Valid(host)
 }
 
 // Authenticate returns the client matching a bearer token. Every configured
@@ -179,13 +155,5 @@ func (c *Client) Allows(host string, port int) bool {
 	if c.ObserveAllPublicHosts {
 		return true
 	}
-	for _, pattern := range c.AllowedHosts {
-		if pattern == host {
-			return true
-		}
-		if suffix, ok := strings.CutPrefix(pattern, "*."); ok && strings.HasSuffix(host, "."+suffix) {
-			return true
-		}
-	}
-	return false
+	return hostpattern.Matches(c.AllowedHosts, host)
 }
