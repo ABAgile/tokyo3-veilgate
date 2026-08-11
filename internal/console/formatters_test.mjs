@@ -48,3 +48,10 @@ test("extracts readable previews without changing JSON tokens", () => {
     ],
   );
 });
+
+test("bounds readable previews while traversing large arrays", () => {
+  const formatted = formatters.format("application/json", JSON.stringify(Array.from({length: 100}, () => "x".repeat(160))));
+
+  assert.equal(formatted.previews.length, 24);
+  assert.equal(formatted.previews[23].path, "$[23]");
+});

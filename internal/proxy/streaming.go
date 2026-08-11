@@ -163,6 +163,20 @@ func (h *Handler) prepareStreamingResponse(resp *http.Response, client, host str
 	return encoding, sse, nil
 }
 
+func copyStreamingResponseHeaders(dst http.Header, resp *http.Response) {
+	removeHopHeaders(resp.Header)
+	copyHeaders(dst, resp.Header)
+	for name := range resp.Trailer {
+		dst.Add("Trailer", name)
+	}
+}
+
+func copyResponseTrailers(dst http.Header, resp *http.Response) {
+	for name, values := range resp.Trailer {
+		dst[name] = append([]string(nil), values...)
+	}
+}
+
 func (h *Handler) streamResponseBody(resp *http.Response, output io.Writer, flush func() error, encoding string, sse bool, client, host string, item *flow.Flow) (int64, error) {
 	var received int64
 	counted := &countingReadCloser{ReadCloser: resp.Body, n: &received}

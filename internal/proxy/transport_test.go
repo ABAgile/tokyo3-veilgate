@@ -169,17 +169,40 @@ func TestUpstreamTransportCacheSeparatesPinnedIPs(t *testing.T) {
 	}
 }
 
-func TestUpstreamTransportRetainsEvictionsUntilClose(t *testing.T) {
+func TestUpstreamTransportReleasesIdleEvictions(t *testing.T) {
 	h := &Handler{}
 	ip := netip.MustParseAddr("93.184.216.34")
-	for port := 80; port <= 80+maxCachedUpstreamTransports; port++ {
+	for port := 80; port <= 80+maxCachedUpstreamTransports+4; port++ {
 		h.upstreamTransport("http", "api.example.com", ip, port)
 	}
 	if got := len(h.transports); got != maxCachedUpstreamTransports {
 		t.Fatalf("cached transports = %d, want %d", got, maxCachedUpstreamTransports)
 	}
+	if got := len(h.drainingTransports); got != 0 {
+		t.Fatalf("idle draining transports = %d, want 0", got)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUpstreamTransportReleasesActiveEvictionAfterResponseClose(t *testing.T) {
+	h := &Handler{}
+	ip := netip.MustParseAddr("93.184.216.34")
+	active := h.acquireUpstreamTransport("http", "api.example.com", ip, 80)
+	if active == nil {
+		t.Fatal("active transport was not created")
+	}
+	active.lastUsed = time.Unix(0, 0)
+	for port := 81; port <= 80+maxCachedUpstreamTransports; port++ {
+		h.upstreamTransport("http", "api.example.com", ip, port)
+	}
 	if got := len(h.drainingTransports); got != 1 {
-		t.Fatalf("draining transports = %d, want 1", got)
+		t.Fatalf("active draining transports = %d, want 1", got)
+	}
+	h.releaseUpstreamTransport(active)
+	if got := len(h.drainingTransports); got != 0 {
+		t.Fatalf("released draining transports = %d, want 0", got)
 	}
 	if err := h.Close(); err != nil {
 		t.Fatal(err)

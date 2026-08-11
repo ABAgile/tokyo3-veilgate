@@ -196,7 +196,7 @@ type Handler struct {
 
 	transportMu        sync.Mutex
 	transports         map[upstreamTransportKey]*cachedUpstreamTransport
-	drainingTransports []*http.Transport
+	drainingTransports []*cachedUpstreamTransport
 	transportClosed    bool
 
 	recordMu           sync.Mutex
@@ -790,6 +790,27 @@ func (h *Handler) forwardHTTP(w http.ResponseWriter, r *http.Request, ip netip.A
 	}
 	defer resp.Body.Close()
 	item.UpstreamProtocol = protocolLabel(resp.ProtoMajor, resp.ProtoMinor)
+	if streaming, _ := shouldStreamResponse(r.Method, resp.StatusCode, resp.Header.Get("Content-Type")); streaming {
+		encoding, sse, err := h.prepareStreamingResponse(resp, client, host, item)
+		if err != nil {
+			reason := safeReason(err)
+			item.Trace("response-streaming", "fail", reason)
+			http.Error(w, "upstream response failed mediation", http.StatusBadGateway)
+			return http.StatusBadGateway, sent, 0, reason
+		}
+		copyStreamingResponseHeaders(w.Header(), resp)
+		w.WriteHeader(resp.StatusCode)
+		received, streamErr := h.streamResponseBody(resp, w, http.NewResponseController(w).Flush, encoding, sse, client, host, item)
+		item.ResponseSecretNames = mergeNames(item.ResponseSecretNames, h.scrubResponseMetadata(resp, client, host))
+		copyResponseTrailers(w.Header(), resp)
+		if streamErr != nil {
+			reason := safeReason(streamErr)
+			item.Trace("response-streaming", "fail", reason)
+			return resp.StatusCode, sent, received, reason
+		}
+		item.Trace("response-streaming", "pass", "records scrubbed and flushed incrementally")
+		return resp.StatusCode, sent, received, ""
+	}
 	if err := h.mediateResponse(resp, client, host, item); err != nil {
 		reason := safeReason(err)
 		item.Trace("response-scrubbing", "fail", reason)
@@ -820,12 +841,27 @@ func (h *Handler) roundTrip(r *http.Request, ip netip.Addr, port int, scheme str
 	out.Header.Del("Proxy-Connection")
 	out.Close = false
 
-	transport := h.upstreamTransport(scheme, out.URL.Hostname(), ip, port)
-	if transport == nil {
+	cached := h.acquireUpstreamTransport(scheme, out.URL.Hostname(), ip, port)
+	if cached == nil {
 		return nil, sent, errHandlerClosed
 	}
-	resp, err := transport.RoundTrip(out)
-	return resp, sent, err
+	resp, err := cached.transport.RoundTrip(out)
+	if err != nil {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		h.releaseUpstreamTransport(cached)
+		return resp, sent, err
+	}
+	if resp == nil || resp.Body == nil {
+		h.releaseUpstreamTransport(cached)
+		return nil, sent, errors.New("upstream transport returned a response without a body")
+	}
+	resp.Body = &trackedResponseBody{
+		ReadCloser: resp.Body,
+		release:    func() { h.releaseUpstreamTransport(cached) },
+	}
+	return resp, sent, nil
 }
 
 func (h *Handler) dialContext() func(context.Context, string, string) (net.Conn, error) {

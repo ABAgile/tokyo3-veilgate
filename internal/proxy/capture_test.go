@@ -39,8 +39,11 @@ func TestMediateResponseVirtualizesOAuthTokensBeforeCapture(t *testing.T) {
 	request := &http.Request{Method: http.MethodPost, URL: tokenURL, Host: "login.example.com"}
 	resp := &http.Response{
 		StatusCode: http.StatusOK, Status: "200 OK",
-		Header:  http.Header{"Content-Type": {"application/json"}},
-		Body:    io.NopCloser(strings.NewReader(`{"access_token":"real-access","refresh_token":"real-refresh","expires_in":3600}`)),
+		Header: http.Header{
+			"Content-Type":    {"application/json"},
+			"X-Echoed-Access": {"real-access"},
+		},
+		Body:    io.NopCloser(strings.NewReader(`{"access_token":"real-access","refresh_token":"real-refresh","echo":"real-access","expires_in":3600}`)),
 		Request: request,
 	}
 	item := &flow.Flow{}
@@ -52,8 +55,8 @@ func TestMediateResponseVirtualizesOAuthTokensBeforeCapture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(body), "real-access") || strings.Contains(string(body), "real-refresh") || !strings.Contains(string(body), "VEILGATED_SECRET_OAUTH_ACCESS_") {
-		t.Fatalf("OAuth response = %q", body)
+	if strings.Contains(string(body), "real-access") || strings.Contains(string(body), "real-refresh") || resp.Header.Get("X-Echoed-Access") == "real-access" || !strings.Contains(string(body), "VEILGATED_SECRET_OAUTH_ACCESS_") {
+		t.Fatalf("OAuth response = %q header = %q", body, resp.Header.Get("X-Echoed-Access"))
 	}
 	if item.Capture.ResponseBody == nil || !strings.Contains(item.Capture.ResponseBody.Text, "[secret:oauth_example_access_token]") || len(item.ResponseSecretNames) != 2 {
 		t.Fatalf("OAuth capture = %#v response names = %#v", item.Capture.ResponseBody, item.ResponseSecretNames)

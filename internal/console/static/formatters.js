@@ -80,7 +80,9 @@
       return;
     }
     if (Array.isArray(value)) {
-      value.forEach((child, index) => collectReadableJSONStrings(child, `${path}[${index}]`, previews, depth + 1));
+      for (let index = 0; index < value.length && previews.length < maxReadableStringPreviews; index++) {
+        collectReadableJSONStrings(value[index], `${path}[${index}]`, previews, depth + 1);
+      }
       return;
     }
     if (!value || typeof value !== "object") return;

@@ -223,6 +223,77 @@ func TestProxyMediatesPlainHTTPResponse(t *testing.T) {
 	}
 }
 
+func TestProxyStreamsPlainHTTPEventsBeforeUpstreamCompletion(t *testing.T) {
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("upstream writer does not support flushing")
+			return
+		}
+		_, _ = io.WriteString(w, "data: real-api-key\n\n")
+		flusher.Flush()
+		<-release
+	}))
+	defer upstream.Close()
+	defer close(release)
+
+	h := &Handler{
+		Policy: testPolicy(t), Resolver: fixedResolver{netip.MustParseAddr("93.184.216.34")}, Secrets: proxyTestBroker(t),
+		CaptureLimit: 4096, MediationLimit: 4096,
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, upstream.Listener.Addr().String())
+		},
+	}
+	defer h.Close()
+	proxyServer := httptest.NewServer(h)
+	defer proxyServer.Close()
+	proxyURL, err := url.Parse(proxyServer.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 3 * time.Second}
+	responseCh := make(chan struct {
+		response *http.Response
+		err      error
+	}, 1)
+	go func() {
+		request, err := http.NewRequest(http.MethodGet, "http://allowed.example/stream", nil)
+		if err == nil {
+			request.Header.Set("Proxy-Authorization", "Bearer 012345678901234567890123")
+		}
+		response, err := client.Do(request)
+		responseCh <- struct {
+			response *http.Response
+			err      error
+		}{response: response, err: err}
+	}()
+
+	var result struct {
+		response *http.Response
+		err      error
+	}
+	select {
+	case result = <-responseCh:
+	case <-time.After(time.Second):
+		t.Fatal("plain HTTP streaming response did not return headers before upstream completion")
+	}
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	defer result.response.Body.Close()
+	firstEvent := make([]byte, len("data: "+testPlaceholder+"\n\n"))
+	if _, err := io.ReadFull(result.response.Body, firstEvent); err != nil {
+		t.Fatal(err)
+	}
+	if string(firstEvent) != "data: "+testPlaceholder+"\n\n" {
+		t.Fatalf("first event = %q", firstEvent)
+	}
+}
+
 func TestProxyBlocksSecretPlaceholderOverPlainHTTP(t *testing.T) {
 	broker, err := secret.New(secret.File{Secrets: []secret.Definition{{
 		Name: "api_key", ValueEnv: "TEST_API_KEY",

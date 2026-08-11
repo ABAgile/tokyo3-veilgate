@@ -121,20 +121,14 @@ func (h *Handler) interceptHTTP2(conn *tls.Conn, outer *http.Request, identity *
 					http.Error(w, item.Reason, item.Status)
 					return
 				}
-				removeHopHeaders(resp.Header)
-				copyHeaders(w.Header(), resp.Header)
-				for name := range resp.Trailer {
-					w.Header().Add("Trailer", name)
-				}
+				copyStreamingResponseHeaders(w.Header(), resp)
 				item.Status = resp.StatusCode
 				w.WriteHeader(resp.StatusCode)
 				received, streamErr := h.streamResponseBody(resp, w, http.NewResponseController(w).Flush, encoding, sse, identity.Name, host, &item)
 				item.BytesReceived = received
 				totalReceived.Add(received)
 				item.ResponseSecretNames = mergeNames(item.ResponseSecretNames, h.scrubResponseMetadata(resp, identity.Name, host))
-				for name, values := range resp.Trailer {
-					w.Header()[name] = append([]string(nil), values...)
-				}
+				copyResponseTrailers(w.Header(), resp)
 				if streamErr != nil {
 					item.Reason = safeReason(streamErr)
 					item.Trace("response-streaming", "fail", item.Reason)

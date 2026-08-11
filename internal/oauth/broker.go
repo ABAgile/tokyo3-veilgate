@@ -331,9 +331,12 @@ func (b *Broker) Scrub(data []byte, client, host string) ([]byte, []string) {
 	defer b.mu.RUnlock()
 	out := append([]byte(nil), data...)
 	used := make(map[string]struct{})
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	// Issuer responses may echo either token; request substitution remains
+	// restricted by tokenHostAllowed.
 	for _, token := range b.tokenValuesLocked() {
 		definition, ok := b.byName[token.broker]
-		if !ok || token.client != client || !tokenHostAllowed(definition, token.kind, host) {
+		if !ok || token.client != client || (host != definition.IssuerHost && !tokenHostAllowed(definition, token.kind, host)) {
 			continue
 		}
 		if bytes.Contains(out, []byte(token.value)) {
