@@ -100,6 +100,9 @@ func TestApplyFailsClosedOutsideScope(t *testing.T) {
 			if _, err := testBroker(t).Apply(req, tc.client, tc.host, tc.secure); err == nil {
 				t.Fatal("Apply succeeded")
 			}
+			if got := req.Header.Get("X-API-Key"); got != testPlaceholder {
+				t.Fatalf("denied request header = %q", got)
+			}
 		})
 	}
 }

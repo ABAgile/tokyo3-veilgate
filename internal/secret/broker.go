@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"slices"
@@ -158,18 +159,18 @@ func (b *Broker) Apply(req *http.Request, client, host string, secure bool) ([]s
 		return nil, nil
 	}
 	used := make(map[string]struct{})
+	// Inspect and authorize against the original headers before staging any
+	// replacement. An unauthorized placeholder must not leave a real value in
+	// the request if the request is later logged, retried, or captured.
 	for _, item := range b.secrets {
 		found := false
 		for name, values := range req.Header {
-			for i, value := range values {
-				replaced, matched, err := replaceHeaderValue(name, value, item.Placeholder, item.value)
+			for _, value := range values {
+				_, matched, err := replaceHeaderValue(name, value, item.Placeholder, item.value)
 				if err != nil {
 					return nil, fmt.Errorf("inspect %s for secret %q: %w", name, item.Name, err)
 				}
-				if matched {
-					found = true
-					values[i] = replaced
-				}
+				found = found || matched
 			}
 		}
 		if !found {
@@ -186,6 +187,28 @@ func (b *Broker) Apply(req *http.Request, client, host string, secure bool) ([]s
 		}
 		used[item.Name] = struct{}{}
 	}
+
+	// Apply all authorized replacements to a private copy before publishing
+	// them to the request. Staging also preserves multiple substitutions in a
+	// single header value, such as two Basic-auth credential components.
+	staged := make(http.Header, len(req.Header))
+	for name, values := range req.Header {
+		staged[name] = append([]string(nil), values...)
+	}
+	for _, item := range b.secrets {
+		for name, values := range staged {
+			for i, value := range values {
+				replaced, matched, err := replaceHeaderValue(name, value, item.Placeholder, item.value)
+				if err != nil {
+					return nil, fmt.Errorf("inspect %s for secret %q: %w", name, item.Name, err)
+				}
+				if matched {
+					values[i] = replaced
+				}
+			}
+		}
+	}
+	maps.Copy(req.Header, staged)
 	names := make([]string, 0, len(used))
 	for name := range used {
 		names = append(names, name)
