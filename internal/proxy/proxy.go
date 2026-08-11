@@ -194,8 +194,10 @@ type Handler struct {
 	MediationLimit                int64
 	DialContext                   func(context.Context, string, string) (net.Conn, error)
 
-	transportMu sync.Mutex
-	transports  map[upstreamTransportKey]*cachedUpstreamTransport
+	transportMu        sync.Mutex
+	transports         map[upstreamTransportKey]*cachedUpstreamTransport
+	drainingTransports []*http.Transport
+	transportClosed    bool
 
 	recordMu           sync.Mutex
 	recordClosed       bool
@@ -813,6 +815,9 @@ func (h *Handler) roundTrip(r *http.Request, ip netip.Addr, port int, scheme str
 	out.Close = false
 
 	transport := h.upstreamTransport(scheme, out.URL.Hostname(), ip, port)
+	if transport == nil {
+		return nil, sent, errHandlerClosed
+	}
 	resp, err := transport.RoundTrip(out)
 	return resp, sent, err
 }

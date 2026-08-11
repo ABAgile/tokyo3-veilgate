@@ -168,3 +168,37 @@ func TestUpstreamTransportCacheSeparatesPinnedIPs(t *testing.T) {
 		t.Fatal("transport cache key does not preserve host/IP isolation")
 	}
 }
+
+func TestUpstreamTransportRetainsEvictionsUntilClose(t *testing.T) {
+	h := &Handler{}
+	ip := netip.MustParseAddr("93.184.216.34")
+	for port := 80; port <= 80+maxCachedUpstreamTransports; port++ {
+		h.upstreamTransport("http", "api.example.com", ip, port)
+	}
+	if got := len(h.transports); got != maxCachedUpstreamTransports {
+		t.Fatalf("cached transports = %d, want %d", got, maxCachedUpstreamTransports)
+	}
+	if got := len(h.drainingTransports); got != 1 {
+		t.Fatalf("draining transports = %d, want 1", got)
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestUpstreamTransportRefusesAfterClose(t *testing.T) {
+	h := &Handler{}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.upstreamTransport("http", "api.example.com", netip.MustParseAddr("93.184.216.34"), 80); got != nil {
+		t.Fatal("transport was rebuilt after close")
+	}
+	request, err := http.NewRequest(http.MethodGet, "http://api.example.com/data", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := h.roundTrip(request, netip.MustParseAddr("93.184.216.34"), 80, "http"); err != errHandlerClosed {
+		t.Fatalf("roundTrip error = %v, want %v", err, errHandlerClosed)
+	}
+}

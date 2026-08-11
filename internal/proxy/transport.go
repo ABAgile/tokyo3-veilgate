@@ -3,6 +3,7 @@ package proxy
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -16,6 +17,8 @@ const (
 	maxCachedUpstreamTransports = 64
 	upstreamIdleConnTimeout     = 5 * time.Minute
 )
+
+var errHandlerClosed = errors.New("proxy handler is closed")
 
 type upstreamTransportKey struct {
 	scheme string
@@ -43,6 +46,9 @@ func (h *Handler) upstreamTransport(scheme, host string, ip netip.Addr, port int
 	now := time.Now()
 	h.transportMu.Lock()
 	defer h.transportMu.Unlock()
+	if h.transportClosed {
+		return nil
+	}
 	if cached := h.transports[key]; cached != nil {
 		cached.lastUsed = now
 		return cached.transport
@@ -109,6 +115,7 @@ func (h *Handler) evictOldestTransportLocked() {
 	if oldest != nil {
 		delete(h.transports, oldestKey)
 		oldest.transport.CloseIdleConnections()
+		h.drainingTransports = append(h.drainingTransports, oldest.transport)
 	}
 }
 
@@ -164,11 +171,14 @@ func (h *Handler) Close() error {
 	}
 
 	h.transportMu.Lock()
-	transports := make([]*http.Transport, 0, len(h.transports))
+	h.transportClosed = true
+	transports := make([]*http.Transport, 0, len(h.transports)+len(h.drainingTransports))
 	for _, cached := range h.transports {
 		transports = append(transports, cached.transport)
 	}
+	transports = append(transports, h.drainingTransports...)
 	h.transports = nil
+	h.drainingTransports = nil
 	h.transportMu.Unlock()
 	for _, transport := range transports {
 		transport.CloseIdleConnections()
