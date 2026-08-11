@@ -173,17 +173,18 @@ func TestWebSocketCompressionRejectsTruncatedMessage(t *testing.T) {
 	}
 }
 
-func TestIsWebSocketUpgradeRequiresBothUpgradeHeaders(t *testing.T) {
+func TestWebSocketUpgradeClassification(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		upgrade    string
-		connection string
-		want       bool
+		name        string
+		upgrade     string
+		connection  string
+		websocket   bool
+		unsupported bool
 	}{
-		{name: "valid websocket", upgrade: "websocket", connection: "keep-alive, Upgrade", want: true},
-		{name: "bare connection upgrade", connection: "Upgrade", want: false},
-		{name: "different upgrade protocol", upgrade: "h2c", connection: "Upgrade", want: false},
-		{name: "websocket without connection token", upgrade: "websocket", connection: "keep-alive", want: false},
+		{name: "valid websocket", upgrade: "websocket", connection: "keep-alive, Upgrade", websocket: true},
+		{name: "bare connection upgrade", connection: "Upgrade", unsupported: true},
+		{name: "different upgrade protocol", upgrade: "h2c", connection: "Upgrade", unsupported: true},
+		{name: "websocket without connection token", upgrade: "websocket", connection: "keep-alive", websocket: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := &http.Request{Header: http.Header{}}
@@ -193,8 +194,11 @@ func TestIsWebSocketUpgradeRequiresBothUpgradeHeaders(t *testing.T) {
 			if tc.connection != "" {
 				req.Header.Set("Connection", tc.connection)
 			}
-			if got := isWebSocketUpgrade(req); got != tc.want {
-				t.Fatalf("isWebSocketUpgrade() = %v, want %v", got, tc.want)
+			if got := isWebSocketUpgrade(req); got != tc.websocket {
+				t.Fatalf("isWebSocketUpgrade() = %v, want %v", got, tc.websocket)
+			}
+			if got := isUnsupportedUpgrade(req); got != tc.unsupported {
+				t.Fatalf("isUnsupportedUpgrade() = %v, want %v", got, tc.unsupported)
 			}
 		})
 	}

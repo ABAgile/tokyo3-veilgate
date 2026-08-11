@@ -64,7 +64,11 @@ type wsCapture struct {
 }
 
 func isWebSocketUpgrade(req *http.Request) bool {
-	return strings.EqualFold(strings.TrimSpace(req.Header.Get("Upgrade")), "websocket") && headerHasToken(req.Header, "Connection", "upgrade")
+	return strings.EqualFold(strings.TrimSpace(req.Header.Get("Upgrade")), "websocket")
+}
+
+func isUnsupportedUpgrade(req *http.Request) bool {
+	return !isWebSocketUpgrade(req) && (strings.TrimSpace(req.Header.Get("Upgrade")) != "" || headerHasToken(req.Header, "Connection", "upgrade"))
 }
 
 func validateWebSocketRequest(req *http.Request) error {

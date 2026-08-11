@@ -682,6 +682,12 @@ func (h *Handler) handleInterceptedRequest(downstream io.Writer, downstreamReade
 	}
 	item.DestinationIP = ip.String()
 	item.Trace("destination-ip", "pass", ip.String())
+	if isUnsupportedUpgrade(req) {
+		reason := "unsupported HTTP upgrade"
+		item.Trace("websocket-handshake", "fail", reason)
+		_ = writeSimpleResponse(downstream, req, http.StatusBadRequest, reason)
+		return http.StatusBadRequest, 0, 0, reason, true
+	}
 	if err := h.mediateRequest(req, identity.Name, host, true, item); err != nil {
 		status := http.StatusBadRequest
 		if mediationErr, ok := errors.AsType[*mediationError](err); ok {
