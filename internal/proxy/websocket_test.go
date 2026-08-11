@@ -159,6 +159,19 @@ func TestWebSocketNoContextCompressionRoundTrip(t *testing.T) {
 	}
 }
 
+func TestWebSocketCompressionRejectsTruncatedMessage(t *testing.T) {
+	compressed, err := compressWebSocketMessage([]byte(`{"message":"hello hello hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(compressed) < 2 {
+		t.Fatalf("compressed message is too short: %d", len(compressed))
+	}
+	if _, err := decompressWebSocketMessage(compressed[:len(compressed)-1], 1024); err == nil {
+		t.Fatal("truncated compressed message was accepted")
+	}
+}
+
 func TestReadWebSocketFrameRejectsReservedBitsAndOversize(t *testing.T) {
 	for _, tc := range []struct {
 		name string

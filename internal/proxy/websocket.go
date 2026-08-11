@@ -594,13 +594,16 @@ func compressWebSocketMessage(message []byte) ([]byte, error) {
 }
 
 func decompressWebSocketMessage(message []byte, limit int64) ([]byte, error) {
-	encoded := make([]byte, 0, len(message)+4)
+	encoded := make([]byte, 0, len(message)+6)
 	encoded = append(encoded, message...)
-	encoded = append(encoded, 0x00, 0x00, 0xff, 0xff)
+	// permessage-deflate removes the sync-flush trailer from each frame. Put it
+	// back and add an empty final block so flate can distinguish a complete
+	// message from a truncated one instead of returning partial output.
+	encoded = append(encoded, 0x00, 0x00, 0xff, 0xff, 0x03, 0x00)
 	reader := flate.NewReader(bytes.NewReader(encoded))
 	defer reader.Close()
 	decoded, err := io.ReadAll(io.LimitReader(reader, limit+1))
-	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+	if err != nil {
 		return nil, fmt.Errorf("decompress WebSocket message: %w", err)
 	}
 	if int64(len(decoded)) > limit {
