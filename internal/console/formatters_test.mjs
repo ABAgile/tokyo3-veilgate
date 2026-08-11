@@ -55,3 +55,19 @@ test("bounds readable previews while traversing large arrays", () => {
   assert.equal(formatted.previews.length, 24);
   assert.equal(formatted.previews[23].path, "$[23]");
 });
+
+test("skips encrypted content from readable previews without changing JSON", () => {
+  const raw = JSON.stringify({
+    encrypted_content: "ciphertext".repeat(40),
+    readable: "operator-visible text".repeat(12),
+    nested: {ENCRYPTED_CONTENT: "more ciphertext".repeat(20)},
+  });
+  const formatted = formatters.format("application/json", raw);
+
+  assert.match(formatted.text, /encrypted_content/);
+  assert.match(formatted.text, /ciphertext/);
+  assert.deepEqual(
+    Array.from(formatted.previews, preview => preview.path),
+    ["$.readable"],
+  );
+});

@@ -319,7 +319,10 @@ bodies open prettified with the documented syntax-key/string/number/literal/
 markup highlighting and a Raw/Prettify toggle in both light and dark mode.
 Long or multiline JSON string values keep their lexical representation in the
 highlighted code and additionally expose collapsed, text-only readable previews
-with their JSON path and line count. Binary records show direction, decoded
+with their JSON path and line count. Readable previews skip values under the
+case-insensitive `encrypted_content` field name because ciphertext is not useful
+as human-readable text; the Raw/Prettify JSON view remains unchanged. Binary
+records show direction, decoded
 byte size, and SHA-256; binary bytes and Base64 are never retained. Captures use `[secret:name]` markers and
 must never show proxy credentials, credential-bearing header values,
 placeholders, or post-substitution secret values. Unsupported HTTP binary
@@ -440,7 +443,8 @@ relying on column position alone.
 - **Do** let operators switch formatted HTML/JSON/JSONL/SSE/Form URL-Encoded captures back to their
   exact retained raw representation.
 - **Do** provide readable previews for long or multiline JSON strings without
-  replacing the lexical JSON code view.
+  replacing the lexical JSON code view, except for `encrypted_content` fields
+  that are not useful as human-readable text.
 - **Do** let operators search, filter, summarize, and expand high-volume
   WebSocket streams without losing chronological raw messages.
 - **Do** keep the flow list at full height and anchor the detail drawer to its

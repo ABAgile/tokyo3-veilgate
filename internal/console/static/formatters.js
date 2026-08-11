@@ -87,6 +87,7 @@
     }
     if (!value || typeof value !== "object") return;
     for (const [key, child] of Object.entries(value)) {
+      if (key.toLowerCase() === "encrypted_content") continue;
       collectReadableJSONStrings(child, jsonPath(path, key), previews, depth + 1);
       if (previews.length >= maxReadableStringPreviews) return;
     }
