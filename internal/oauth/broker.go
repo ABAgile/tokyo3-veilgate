@@ -36,6 +36,7 @@ const (
 // current development deployment and must not be mounted into a sandbox.
 type Broker struct {
 	mu       sync.RWMutex
+	stateMu  sync.Mutex
 	defs     []Definition
 	byName   map[string]Definition
 	authPath string
@@ -63,6 +64,19 @@ type tokenRecord struct {
 type tokenReference struct {
 	key  string
 	kind string
+}
+
+type oauthTokenValue struct {
+	value       string
+	replacement string
+	broker      string
+	client      string
+	kind        string
+}
+
+type oauthVirtualValue struct {
+	placeholder string
+	reference   tokenReference
 }
 
 // New validates policy and loads existing plaintext OAuth state.
@@ -126,12 +140,12 @@ func (b *Broker) SubstituteQuery(target *url.URL, client, host string, secure bo
 			return nil, errors.New("OAuth token placeholders are not allowed in query names")
 		}
 		for index, value := range entries {
-			replaced, tokenName, err := b.replaceExact(value, client, host, secure, siteCredential)
+			replaced, tokenNames, err := b.replaceExact(value, client, host, secure, siteCredential)
 			if err != nil {
 				return nil, err
 			}
 			entries[index] = replaced
-			if tokenName != "" {
+			for _, tokenName := range tokenNames {
 				used[tokenName] = struct{}{}
 			}
 		}
@@ -187,12 +201,12 @@ func (b *Broker) SubstituteBody(contentType string, body []byte, client, host st
 				return nil, nil, true, errors.New("OAuth token placeholders are not allowed in form names")
 			}
 			for index, value := range entries {
-				replaced, tokenName, err := b.replaceExact(value, client, host, secure, siteBody)
+				replaced, tokenNames, err := b.replaceExact(value, client, host, secure, siteBody)
 				if err != nil {
 					return nil, nil, true, err
 				}
 				entries[index] = replaced
-				if tokenName != "" {
+				for _, tokenName := range tokenNames {
 					used[tokenName] = struct{}{}
 				}
 			}
@@ -244,11 +258,8 @@ func (b *Broker) ObserveTokenResponse(req *http.Request, resp *http.Response, bo
 		return nil, nil, fmt.Errorf("configured OAuth field %s is not a string", definition.RefreshTokenField)
 	}
 
-	b.mu.Lock()
-	defer b.mu.Unlock()
 	key := definition.Name + "\x00" + client
-	old := b.records[key]
-	accessPlaceholder, err := newAccessPlaceholder(access)
+	accessPlaceholder, err := newAccessPlaceholder(access, definition.AccessPlaceholderPrefix)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -258,7 +269,11 @@ func (b *Broker) ObserveTokenResponse(req *http.Request, resp *http.Response, bo
 		if err != nil {
 			return nil, nil, err
 		}
-	} else if old.RefreshToken != "" && old.RefreshPlaceholder != "" {
+	}
+
+	b.mu.Lock()
+	old := b.records[key]
+	if !hasRefresh && old.RefreshToken != "" && old.RefreshPlaceholder != "" {
 		// OAuth refresh responses may omit refresh_token when rotation is not
 		// used. Preserve the existing virtual refresh token in that case.
 		refresh = old.RefreshToken
@@ -287,7 +302,8 @@ func (b *Broker) ObserveTokenResponse(req *http.Request, resp *http.Response, bo
 	if record.RefreshPlaceholder != "" {
 		b.virtual[record.RefreshPlaceholder] = tokenReference{key: key, kind: "refresh"}
 	}
-	if err := b.writeStateLocked(); err != nil {
+	b.mu.Unlock()
+	if err := b.writeState(); err != nil {
 		return nil, nil, err
 	}
 
@@ -315,18 +331,14 @@ func (b *Broker) Scrub(data []byte, client, host string) ([]byte, []string) {
 	defer b.mu.RUnlock()
 	out := append([]byte(nil), data...)
 	used := make(map[string]struct{})
-	for _, record := range b.records {
-		definition, ok := b.byName[record.Broker]
-		if !ok || record.Client != client || !tokenHostAllowed(definition, "access", host) && !tokenHostAllowed(definition, "refresh", host) {
+	for _, token := range b.tokenValuesLocked() {
+		definition, ok := b.byName[token.broker]
+		if !ok || token.client != client || !tokenHostAllowed(definition, token.kind, host) {
 			continue
 		}
-		if record.AccessToken != "" && bytes.Contains(out, []byte(record.AccessToken)) {
-			out = bytes.ReplaceAll(out, []byte(record.AccessToken), []byte(record.AccessPlaceholder))
-			used[oauthName(record.Broker, "access")] = struct{}{}
-		}
-		if record.RefreshToken != "" && bytes.Contains(out, []byte(record.RefreshToken)) {
-			out = bytes.ReplaceAll(out, []byte(record.RefreshToken), []byte(record.RefreshPlaceholder))
-			used[oauthName(record.Broker, "refresh")] = struct{}{}
+		if bytes.Contains(out, []byte(token.value)) {
+			out = bytes.ReplaceAll(out, []byte(token.value), []byte(token.replacement))
+			used[oauthName(token.broker, token.kind)] = struct{}{}
 		}
 	}
 	return out, sortedNames(used)
@@ -340,15 +352,11 @@ func (b *Broker) Sanitize(data []byte) []byte {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	out := append([]byte(nil), data...)
-	for _, record := range b.records {
-		for _, value := range []string{record.AccessToken, record.AccessPlaceholder} {
+	for _, token := range b.tokenValuesLocked() {
+		marker := []byte("[secret:" + oauthName(token.broker, token.kind) + "]")
+		for _, value := range []string{token.value, token.replacement} {
 			if value != "" {
-				out = bytes.ReplaceAll(out, []byte(value), []byte("[secret:"+oauthName(record.Broker, "access")+"]"))
-			}
-		}
-		for _, value := range []string{record.RefreshToken, record.RefreshPlaceholder} {
-			if value != "" {
-				out = bytes.ReplaceAll(out, []byte(value), []byte("[secret:"+oauthName(record.Broker, "refresh")+"]"))
+				out = bytes.ReplaceAll(out, []byte(value), marker)
 			}
 		}
 	}
@@ -398,10 +406,11 @@ func (b *Broker) replaceRequestValue(value, client, host string, secure bool, si
 	}
 	used := make(map[string]struct{})
 	out := value
-	for placeholder, reference := range b.virtual {
-		if !strings.Contains(out, placeholder) {
+	for _, virtual := range b.virtualValuesLocked() {
+		if !strings.Contains(out, virtual.placeholder) {
 			continue
 		}
+		reference := virtual.reference
 		record, ok := b.records[reference.key]
 		if !ok || record.Client != client {
 			return value, nil, errors.New("OAuth token is not authorized for this client")
@@ -422,7 +431,7 @@ func (b *Broker) replaceRequestValue(value, client, host string, secure bool, si
 		if replacement == "" {
 			return value, nil, errors.New("OAuth token is unavailable")
 		}
-		out = strings.ReplaceAll(out, placeholder, replacement)
+		out = strings.ReplaceAll(out, virtual.placeholder, replacement)
 		used[name] = struct{}{}
 	}
 	if site == siteCredential && (oauthPlaceholderPattern.MatchString(out) ||
@@ -432,28 +441,25 @@ func (b *Broker) replaceRequestValue(value, client, host string, secure bool, si
 	return out, sortedNames(used), nil
 }
 
-func (b *Broker) replaceExact(value, client, host string, secure bool, site substitutionSite) (string, string, error) {
+func (b *Broker) replaceExact(value, client, host string, secure bool, site substitutionSite) (string, []string, error) {
 	replaced, names, err := b.replaceRequestValue(value, client, host, secure, site, false)
 	if err != nil {
-		return value, "", err
+		return value, nil, err
 	}
-	if len(names) == 0 {
-		return value, "", nil
+	if len(names) == 0 || replaced == value {
+		return value, nil, nil
 	}
-	if replaced == value {
-		return value, "", nil
-	}
-	return replaced, names[0], nil
+	return replaced, names, nil
 }
 
 func (b *Broker) transformJSON(value any, client, host string, secure bool, used map[string]struct{}) (any, error) {
 	switch typed := value.(type) {
 	case string:
-		replaced, name, err := b.replaceExact(typed, client, host, secure, siteBody)
+		replaced, names, err := b.replaceExact(typed, client, host, secure, siteBody)
 		if err != nil {
 			return nil, err
 		}
-		if name != "" {
+		for _, name := range names {
 			used[name] = struct{}{}
 		}
 		return replaced, nil
@@ -556,6 +562,69 @@ func (b *Broker) containsKnownPlaceholderLocked(data []byte) bool {
 	return false
 }
 
+func (b *Broker) tokenValuesLocked() []oauthTokenValue {
+	values := make([]oauthTokenValue, 0, len(b.records)*2)
+	for _, record := range b.records {
+		if record.AccessToken != "" && record.AccessPlaceholder != "" {
+			values = append(values, oauthTokenValue{
+				value:       record.AccessToken,
+				replacement: record.AccessPlaceholder,
+				broker:      record.Broker,
+				client:      record.Client,
+				kind:        "access",
+			})
+		}
+		if record.RefreshToken != "" && record.RefreshPlaceholder != "" {
+			values = append(values, oauthTokenValue{
+				value:       record.RefreshToken,
+				replacement: record.RefreshPlaceholder,
+				broker:      record.Broker,
+				client:      record.Client,
+				kind:        "refresh",
+			})
+		}
+	}
+	sort.Slice(values, func(i, j int) bool {
+		if len(values[i].value) != len(values[j].value) {
+			return len(values[i].value) > len(values[j].value)
+		}
+		if values[i].value != values[j].value {
+			return values[i].value < values[j].value
+		}
+		if values[i].replacement != values[j].replacement {
+			return values[i].replacement < values[j].replacement
+		}
+		if values[i].broker != values[j].broker {
+			return values[i].broker < values[j].broker
+		}
+		if values[i].client != values[j].client {
+			return values[i].client < values[j].client
+		}
+		return values[i].kind < values[j].kind
+	})
+	return values
+}
+
+func (b *Broker) virtualValuesLocked() []oauthVirtualValue {
+	values := make([]oauthVirtualValue, 0, len(b.virtual))
+	for placeholder, reference := range b.virtual {
+		values = append(values, oauthVirtualValue{placeholder: placeholder, reference: reference})
+	}
+	sort.Slice(values, func(i, j int) bool {
+		if len(values[i].placeholder) != len(values[j].placeholder) {
+			return len(values[i].placeholder) > len(values[j].placeholder)
+		}
+		if values[i].placeholder != values[j].placeholder {
+			return values[i].placeholder < values[j].placeholder
+		}
+		if values[i].reference.key != values[j].reference.key {
+			return values[i].reference.key < values[j].reference.key
+		}
+		return values[i].reference.kind < values[j].reference.kind
+	})
+	return values
+}
+
 func (b *Broker) validCredentialValueLocked(value string, allowScheme bool) bool {
 	trimmed := strings.TrimSpace(value)
 	candidates := []string{trimmed}
@@ -627,11 +696,19 @@ func (b *Broker) loadState() error {
 	return nil
 }
 
-func (b *Broker) writeStateLocked() error {
+func (b *Broker) writeState() error {
+	// Serialize snapshots so concurrent token rotations cannot write an older
+	// snapshot after a newer one. The filesystem work stays outside b.mu so
+	// fsync and rename do not block Scrub or Apply readers.
+	b.stateMu.Lock()
+	defer b.stateMu.Unlock()
+
+	b.mu.RLock()
 	state := authFile{Version: authVersion, Tokens: make([]tokenRecord, 0, len(b.records))}
 	for _, record := range b.records {
 		state.Tokens = append(state.Tokens, record)
 	}
+	b.mu.RUnlock()
 	sort.Slice(state.Tokens, func(i, j int) bool {
 		if state.Tokens[i].Broker == state.Tokens[j].Broker {
 			return state.Tokens[i].Client < state.Tokens[j].Client
@@ -729,15 +806,15 @@ func jsonString(raw json.RawMessage) (string, bool) {
 	return value, true
 }
 
-func newAccessPlaceholder(realToken string) (string, error) {
+func newAccessPlaceholder(realToken, accessPlaceholderPrefix string) (string, error) {
 	if isJWT(realToken) {
 		virtualJWT, err := makeVirtualJWT(realToken)
 		if err == nil {
 			return virtualJWT, nil
 		}
 	}
-	if strings.Contains(realToken, "sk-ant-oat") {
-		return newPlaceholder("ACCESS_sk-ant-oat")
+	if accessPlaceholderPrefix != "" && strings.HasPrefix(realToken, accessPlaceholderPrefix) {
+		return newPlaceholder("ACCESS_" + accessPlaceholderPrefix)
 	}
 	return newPlaceholder("ACCESS")
 }

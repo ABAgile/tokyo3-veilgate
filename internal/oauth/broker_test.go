@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -137,7 +138,9 @@ func TestBrokerRejectsEmbeddedCredentialPlaceholders(t *testing.T) {
 
 func TestBrokerPreservesAnthropicOAuthPrefix(t *testing.T) {
 	authPath := filepath.Join(t.TempDir(), "auth.json")
-	broker, err := New(testOAuthFile(), authPath)
+	file := testOAuthFile()
+	file.Brokers[0].AccessPlaceholderPrefix = "sk-ant-oat"
+	broker, err := New(file, authPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,6 +162,91 @@ func TestBrokerPreservesAnthropicOAuthPrefix(t *testing.T) {
 	}
 	if !strings.Contains(accessToken, "sk-ant-oat") {
 		t.Fatalf("access_token placeholder missing sk-ant-oat: %q", accessToken)
+	}
+}
+
+func TestBrokerSubstitutesAllTokenNamesFromOneBodyValue(t *testing.T) {
+	file := File{Brokers: []Definition{
+		{Name: "first", Clients: []string{"agent"}, IssuerHost: "login.example.com", TokenPath: "/oauth/first", APIHosts: []string{"api.example.com"}},
+		{Name: "second", Clients: []string{"agent"}, IssuerHost: "login.example.com", TokenPath: "/oauth/second", APIHosts: []string{"api.example.com"}},
+	}}
+	broker, err := New(file, filepath.Join(t.TempDir(), "auth.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	observe := func(path, access, refresh string) string {
+		request, err := http.NewRequest(http.MethodPost, "https://login.example.com"+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}}
+		body := []byte(`{"access_token":"` + access + `","refresh_token":"` + refresh + `"}`)
+		virtual, _, err := broker.ObserveTokenResponse(request, response, body, "agent", "login.example.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]string
+		if err := json.Unmarshal(virtual, &fields); err != nil {
+			t.Fatal(err)
+		}
+		return fields["refresh_token"]
+	}
+	first := observe("/oauth/first", "access-first", "refresh-first")
+	second := observe("/oauth/second", "access-second", "refresh-second")
+	body := []byte(`{"refresh":"` + first + second + `"}`)
+	transformed, names, supported, err := broker.SubstituteBody("application/json", body, "agent", "login.example.com", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !supported || string(transformed) != `{"refresh":"refresh-firstrefresh-second"}` || len(names) != 2 {
+		t.Fatalf("body = %q supported = %t names = %#v", transformed, supported, names)
+	}
+}
+
+func TestBrokerScrubPrefersLongestOverlappingToken(t *testing.T) {
+	file := File{Brokers: []Definition{
+		{
+			Name:       "short",
+			Clients:    []string{"agent"},
+			IssuerHost: "login.example.com",
+			TokenPath:  "/oauth/short",
+			APIHosts:   []string{"api.example.com"},
+		},
+		{
+			Name:       "long",
+			Clients:    []string{"agent"},
+			IssuerHost: "login.example.com",
+			TokenPath:  "/oauth/long",
+			APIHosts:   []string{"api.example.com"},
+		},
+	}}
+	broker, err := New(file, filepath.Join(t.TempDir(), "auth.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	observe := func(path, real string) string {
+		tokenRequest, err := http.NewRequest(http.MethodPost, "https://login.example.com"+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}}
+		virtual, _, err := broker.ObserveTokenResponse(tokenRequest, response, []byte(`{"access_token":"`+real+`"}`), "agent", "login.example.com")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]string
+		if err := json.Unmarshal(virtual, &fields); err != nil {
+			t.Fatal(err)
+		}
+		return fields["access_token"]
+	}
+	short := observe("/oauth/short", "token-value")
+	long := observe("/oauth/long", "token-value-long")
+	for range 10 {
+		scrubbed, names := broker.Scrub([]byte("prefix token-value-long suffix"), "agent", "api.example.com")
+		if string(scrubbed) != "prefix "+long+" suffix" || len(names) != 1 || names[0] != "oauth_long_access_token" {
+			t.Fatalf("scrubbed = %q names = %#v (short placeholder %q)", scrubbed, names, short)
+		}
 	}
 }
 
@@ -411,11 +499,55 @@ func TestBrokerConfinesBodySubstitutionToTokenEndpoint(t *testing.T) {
 	}
 }
 
+func TestBrokerConcurrentStateWritesRetainBothTokens(t *testing.T) {
+	file := File{Brokers: []Definition{
+		{Name: "first", Clients: []string{"agent"}, IssuerHost: "login.example.com", TokenPath: "/oauth/first", APIHosts: []string{"api.example.com"}},
+		{Name: "second", Clients: []string{"agent"}, IssuerHost: "login.example.com", TokenPath: "/oauth/second", APIHosts: []string{"api.example.com"}},
+	}}
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	broker, err := New(file, authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wait sync.WaitGroup
+	errCh := make(chan error, len(file.Brokers))
+	for index, definition := range file.Brokers {
+		wait.Add(1)
+		go func(index int, definition Definition) {
+			defer wait.Done()
+			request, err := http.NewRequest(http.MethodPost, "https://"+definition.IssuerHost+definition.TokenPath, nil)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			response := &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}}
+			body := []byte(`{"access_token":"concurrent-token-` + string(rune('a'+index)) + `"}`)
+			_, _, err = broker.ObserveTokenResponse(request, response, body, "agent", definition.IssuerHost)
+			errCh <- err
+		}(index, definition)
+	}
+	wait.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	loaded, err := New(file, authPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded.records) != len(file.Brokers) {
+		t.Fatalf("persisted records = %d, want %d", len(loaded.records), len(file.Brokers))
+	}
+}
+
 func TestOAuthPolicyRejectsUnsafeDefinitions(t *testing.T) {
 	for _, definition := range []Definition{
 		{Name: "example", Clients: []string{"agent"}, IssuerHost: "login.example.com", TokenPath: "oauth/token", APIHosts: []string{"api.example.com"}},
 		{Name: "example", Clients: []string{"agent"}, IssuerHost: "login.example.com", TokenPath: "/oauth/../token", APIHosts: []string{"api.example.com"}},
 		{Name: "example", Clients: []string{"agent"}, IssuerHost: "login.example.com", TokenPath: "/oauth/token", APIHosts: nil},
+		{Name: "example", Clients: []string{"agent"}, IssuerHost: "login.example.com", TokenPath: "/oauth/token", APIHosts: []string{"api.example.com"}, AccessPlaceholderPrefix: "bad/prefix"},
 	} {
 		if _, err := New(File{Brokers: []Definition{definition}}, filepath.Join(t.TempDir(), "auth.json")); err == nil {
 			t.Fatalf("unsafe definition accepted: %#v", definition)

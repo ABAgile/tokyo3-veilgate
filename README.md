@@ -168,6 +168,10 @@ Dynamic OAuth virtualization is configured separately from static
 
 Set `VEILGATED_OAUTH_FILE` to enable a broker. A successful configured token
 response is rewritten for the sandbox with virtual access and refresh tokens.
+A broker may optionally set `access_placeholder_prefix` when its client
+requires a recognizable access-token shape; the prefix is preserved in the
+virtual opaque token only when the real token starts with it. For example, the
+Anthropic policy uses `"access_placeholder_prefix": "sk-ant-oat"`.
 Subsequent requests containing those virtual values are replaced with the real
 values only for the configured issuer/API hosts and sandbox client. Refresh
 responses update the mapping; a response that omits `refresh_token` preserves

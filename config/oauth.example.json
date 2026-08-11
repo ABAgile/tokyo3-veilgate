@@ -24,7 +24,8 @@
         "api.anthropic.com"
       ],
       "access_token_field": "access_token",
-      "refresh_token_field": "refresh_token"
+      "refresh_token_field": "refresh_token",
+      "access_placeholder_prefix": "sk-ant-oat"
     },
     {
       "name": "antigravity",

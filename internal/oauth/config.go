@@ -20,13 +20,14 @@ type File struct {
 
 // Definition identifies one token endpoint and the API hosts for its tokens.
 type Definition struct {
-	Name              string   `json:"name"`
-	Clients           []string `json:"clients"`
-	IssuerHost        string   `json:"issuer_host"`
-	TokenPath         string   `json:"token_path"`
-	APIHosts          []string `json:"api_hosts"`
-	AccessTokenField  string   `json:"access_token_field,omitempty"`
-	RefreshTokenField string   `json:"refresh_token_field,omitempty"`
+	Name                    string   `json:"name"`
+	Clients                 []string `json:"clients"`
+	IssuerHost              string   `json:"issuer_host"`
+	TokenPath               string   `json:"token_path"`
+	APIHosts                []string `json:"api_hosts"`
+	AccessTokenField        string   `json:"access_token_field,omitempty"`
+	RefreshTokenField       string   `json:"refresh_token_field,omitempty"`
+	AccessPlaceholderPrefix string   `json:"access_placeholder_prefix,omitempty"`
 }
 
 // Load reads and validates an OAuth broker policy and its persisted state.
@@ -97,6 +98,10 @@ func (f *File) validate() error {
 		if !validJSONField(definition.AccessTokenField) || !validJSONField(definition.RefreshTokenField) {
 			return fmt.Errorf("OAuth broker %q token field is invalid", definition.Name)
 		}
+		definition.AccessPlaceholderPrefix = strings.TrimSpace(definition.AccessPlaceholderPrefix)
+		if !validPlaceholderPrefix(definition.AccessPlaceholderPrefix) {
+			return fmt.Errorf("OAuth broker %q access_placeholder_prefix is invalid", definition.Name)
+		}
 		for _, client := range definition.Clients {
 			endpoint := client + "\x00" + definition.IssuerHost + "\x00" + definition.TokenPath
 			if _, exists := endpoints[endpoint]; exists {
@@ -152,6 +157,20 @@ func validIdentifier(value string) bool {
 	}
 	for index, character := range value {
 		if (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9' && index > 0) || (character == '_' && index > 0) || (character >= 'A' && character <= 'Z' && index > 0) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func validPlaceholderPrefix(value string) bool {
+	if len(value) > 64 {
+		return false
+	}
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') || character == '-' || character == '_' {
 			continue
 		}
 		return false
