@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net/http"
 	"strings"
 	"testing"
 
@@ -169,6 +170,33 @@ func TestWebSocketCompressionRejectsTruncatedMessage(t *testing.T) {
 	}
 	if _, err := decompressWebSocketMessage(compressed[:len(compressed)-1], 1024); err == nil {
 		t.Fatal("truncated compressed message was accepted")
+	}
+}
+
+func TestIsWebSocketUpgradeRequiresBothUpgradeHeaders(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		upgrade    string
+		connection string
+		want       bool
+	}{
+		{name: "valid websocket", upgrade: "websocket", connection: "keep-alive, Upgrade", want: true},
+		{name: "bare connection upgrade", connection: "Upgrade", want: false},
+		{name: "different upgrade protocol", upgrade: "h2c", connection: "Upgrade", want: false},
+		{name: "websocket without connection token", upgrade: "websocket", connection: "keep-alive", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &http.Request{Header: http.Header{}}
+			if tc.upgrade != "" {
+				req.Header.Set("Upgrade", tc.upgrade)
+			}
+			if tc.connection != "" {
+				req.Header.Set("Connection", tc.connection)
+			}
+			if got := isWebSocketUpgrade(req); got != tc.want {
+				t.Fatalf("isWebSocketUpgrade() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

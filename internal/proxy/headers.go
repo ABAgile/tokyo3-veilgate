@@ -10,19 +10,19 @@ import (
 )
 
 func captureHeaders(header http.Header, host string, broker SecretBroker, limit int64) ([]flow.HeaderCapture, bool) {
-	copy := header.Clone()
+	cloned := header.Clone()
 	if host != "" {
-		copy["Host"] = []string{host}
+		cloned["Host"] = []string{host}
 	}
-	names := make([]string, 0, len(copy))
-	for name := range copy {
+	names := make([]string, 0, len(cloned))
+	for name := range cloned {
 		names = append(names, name)
 	}
 	sort.Slice(names, func(i, j int) bool { return strings.ToLower(names[i]) < strings.ToLower(names[j]) })
 	captures := make([]flow.HeaderCapture, 0, len(names))
 	remaining := limit
 	for _, name := range names {
-		values := copy[name]
+		values := cloned[name]
 		capture := flow.HeaderCapture{Name: http.CanonicalHeaderKey(name), Values: make([]string, 0, len(values))}
 		for _, value := range values {
 			if sensitiveHeader(name) {
@@ -32,7 +32,7 @@ func captureHeaders(header http.Header, host string, broker SecretBroker, limit 
 			}
 			cost := int64(len(capture.Name) + len(value))
 			if cost > remaining {
-				return captures, true
+				return append(captures, capture), true
 			}
 			remaining -= cost
 			capture.Values = append(capture.Values, value)

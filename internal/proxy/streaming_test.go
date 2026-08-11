@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"compress/flate"
 	"io"
 	"net/http"
 	"net/http/httputil"
@@ -70,14 +71,14 @@ func TestStreamingResponseFlushesCompleteSSEEventAndScrubsSplitSecret(t *testing
 	if got := string(output.Bytes()); got != wantWire {
 		t.Fatalf("flushed output = %q", got)
 	}
-	if item.Capture.ResponseBody == nil || item.Capture.ResponseBody.Text != "data: [secret:api_key]\n\n" {
-		t.Fatalf("capture = %#v", item.Capture)
-	}
 	if err := inputWriter.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+	if item.Capture.ResponseBody == nil || item.Capture.ResponseBody.Text != "data: [secret:api_key]\n\n" {
+		t.Fatalf("capture = %#v", item.Capture)
 	}
 }
 
@@ -174,6 +175,47 @@ func TestCompressedNDJSONStreamingRoundTrip(t *testing.T) {
 				t.Fatalf("capture = %#v", item.Capture)
 			}
 		})
+	}
+}
+
+func TestRawDeflateStreamingPreservesRawFraming(t *testing.T) {
+	plain := []byte("{\"message\":\"raw\"}\n")
+	var encoded bytes.Buffer
+	writer, err := flate.NewWriter(&encoded, flate.DefaultCompression)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write(plain); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": {"application/x-ndjson"}, "Content-Encoding": {"deflate"}},
+		Body:       io.NopCloser(bytes.NewReader(encoded.Bytes())),
+	}
+	item := &flow.Flow{}
+	h := &Handler{CaptureLimit: 1024, MediationLimit: 4096}
+	encoding, sse, err := h.prepareStreamingResponse(resp, "agent", "allowed.example", item)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	if _, err := h.streamResponseBody(resp, &output, nil, encoding, sse, "agent", "allowed.example", item); err != nil {
+		t.Fatal(err)
+	}
+
+	reader := flate.NewReader(bytes.NewReader(output.Bytes()))
+	decoded, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil {
+		t.Fatalf("decode forwarded raw deflate: %v", err)
+	}
+	if !bytes.Equal(decoded, plain) {
+		t.Fatalf("decoded = %q, want %q", decoded, plain)
 	}
 }
 

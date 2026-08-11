@@ -52,50 +52,57 @@ func streamingResponseType(contentType string) (bool, bool) {
 	}
 }
 
-func streamingDecoder(body io.Reader, encoding string) (io.ReadCloser, error) {
+func streamingDecoder(body io.Reader, encoding string) (io.ReadCloser, bool, error) {
 	switch encoding {
 	case "identity":
-		return io.NopCloser(body), nil
+		return io.NopCloser(body), false, nil
 	case "gzip":
 		reader, err := gzip.NewReader(body)
 		if err != nil {
-			return nil, fmt.Errorf("decode gzip stream: %w", err)
+			return nil, false, fmt.Errorf("decode gzip stream: %w", err)
 		}
-		return reader, nil
+		return reader, false, nil
 	case "deflate":
 		buffered := bufio.NewReader(body)
 		header, err := buffered.Peek(2)
 		if err != nil {
-			return nil, fmt.Errorf("decode deflate stream: %w", err)
+			return nil, false, fmt.Errorf("decode deflate stream: %w", err)
 		}
 		if header[0]&0x0f == 8 && (uint16(header[0])<<8|uint16(header[1]))%31 == 0 {
 			reader, err := zlib.NewReader(buffered)
 			if err != nil {
-				return nil, fmt.Errorf("decode deflate stream: %w", err)
+				return nil, false, fmt.Errorf("decode deflate stream: %w", err)
 			}
-			return reader, nil
+			return reader, false, nil
 		}
-		return flate.NewReader(buffered), nil
+		return flate.NewReader(buffered), true, nil
 	case "br":
-		return io.NopCloser(brotli.NewReader(body)), nil
+		return io.NopCloser(brotli.NewReader(body)), false, nil
 	case "zstd":
 		reader, err := zstd.NewReader(body)
 		if err != nil {
-			return nil, fmt.Errorf("decode zstd stream: %w", err)
+			return nil, false, fmt.Errorf("decode zstd stream: %w", err)
 		}
-		return reader.IOReadCloser(), nil
+		return reader.IOReadCloser(), false, nil
 	default:
-		return nil, fmt.Errorf("unsupported content encoding %q", encoding)
+		return nil, false, fmt.Errorf("unsupported content encoding %q", encoding)
 	}
 }
 
-func streamingEncoder(output io.Writer, encoding string) (flushWriteCloser, error) {
+func streamingEncoder(output io.Writer, encoding string, rawDeflate bool) (flushWriteCloser, error) {
 	switch encoding {
 	case "identity":
 		return identityStreamWriter{Writer: output}, nil
 	case "gzip":
 		return gzip.NewWriter(output), nil
 	case "deflate":
+		if rawDeflate {
+			writer, err := flate.NewWriter(output, flate.DefaultCompression)
+			if err != nil {
+				return nil, fmt.Errorf("encode deflate stream: %w", err)
+			}
+			return writer, nil
+		}
 		return zlib.NewWriter(output), nil
 	case "br":
 		return brotli.NewWriterLevel(output, brotli.DefaultCompression), nil
@@ -159,12 +166,12 @@ func (h *Handler) prepareStreamingResponse(resp *http.Response, client, host str
 func (h *Handler) streamResponseBody(resp *http.Response, output io.Writer, flush func() error, encoding string, sse bool, client, host string, item *flow.Flow) (int64, error) {
 	var received int64
 	counted := &countingReadCloser{ReadCloser: resp.Body, n: &received}
-	decoder, err := streamingDecoder(counted, encoding)
+	decoder, rawDeflate, err := streamingDecoder(counted, encoding)
 	if err != nil {
 		return received, err
 	}
 	defer decoder.Close()
-	encoder, err := streamingEncoder(output, encoding)
+	encoder, err := streamingEncoder(output, encoding, rawDeflate)
 	if err != nil {
 		return received, err
 	}
@@ -235,7 +242,6 @@ func (capture *streamCapture) add(transformed []byte) {
 		capture.item.Capture.Truncated = true
 	}
 	_, _ = capture.text.Write(clean)
-	capture.item.Capture.ResponseBody.Text = capture.text.String()
 }
 
 func (capture *streamCapture) finish() {

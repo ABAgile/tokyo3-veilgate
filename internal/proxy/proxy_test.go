@@ -67,7 +67,7 @@ func storedFlows(t *testing.T, store *flow.Store, expected int) []flow.Flow {
 func TestCloseWaitsForFlowRecording(t *testing.T) {
 	store := flow.NewStore(10)
 	h := &Handler{Store: store}
-	h.recordFlow(context.Background(), flow.Flow{Host: "example.com"})
+	h.recordFlow(flow.Flow{Host: "example.com"})
 	if err := h.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestRecordQueueDropsInsteadOfBlocking(t *testing.T) {
 		},
 	}
 	for range recordQueueCapacity + recordWorkerCount {
-		h.recordFlow(context.Background(), flow.Flow{Host: "example.com"})
+		h.recordFlow(flow.Flow{Host: "example.com"})
 	}
 	for range recordWorkerCount {
 		select {
@@ -105,7 +105,7 @@ func TestRecordQueueDropsInsteadOfBlocking(t *testing.T) {
 		}
 	}
 	start := time.Now()
-	h.recordFlow(context.Background(), flow.Flow{Host: "example.com"})
+	h.recordFlow(flow.Flow{Host: "example.com"})
 	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
 		t.Fatalf("record enqueue blocked for %s", elapsed)
 	}
@@ -132,7 +132,7 @@ func TestDeniedRecordWaitsForQueueCapacity(t *testing.T) {
 		}
 	}}
 	for range recordWorkerCount {
-		h.recordFlow(context.Background(), flow.Flow{Decision: "allowed"})
+		h.recordFlow(flow.Flow{Decision: "allowed"})
 	}
 	for range recordWorkerCount {
 		select {
@@ -142,14 +142,14 @@ func TestDeniedRecordWaitsForQueueCapacity(t *testing.T) {
 		}
 	}
 	for range recordQueueCapacity {
-		h.recordFlow(context.Background(), flow.Flow{Decision: "allowed"})
+		h.recordFlow(flow.Flow{Decision: "allowed"})
 	}
 
 	go func() {
 		time.Sleep(recordDeniedEnqueueTimeout / 4)
 		close(release)
 	}()
-	h.recordFlow(context.Background(), flow.Flow{Decision: "denied"})
+	h.recordFlow(flow.Flow{Decision: "denied"})
 	if got := h.recordDropped.Load(); got != 0 {
 		t.Fatalf("denied record was dropped: %d", got)
 	}

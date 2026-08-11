@@ -247,7 +247,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f := flow.Flow{StartedAt: started, Method: r.Method, Decision: "denied", Mode: "direct", DownstreamProtocol: protocolLabel(r.ProtoMajor, r.ProtoMinor)}
 	defer func() {
 		f.Duration = time.Since(started)
-		h.recordFlow(r.Context(), f)
+		h.recordFlow(f)
 	}()
 
 	client, ok := h.authenticate(r)
@@ -341,7 +341,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) recordFlow(_ context.Context, item flow.Flow) {
+func (h *Handler) recordFlow(item flow.Flow) {
 	if h.Store == nil && h.Record == nil {
 		return
 	}
@@ -649,7 +649,7 @@ func (h *Handler) intercept(w http.ResponseWriter, outer *http.Request, identity
 		item.Duration = time.Since(requestStarted)
 		totalSent += sent
 		totalReceived += received
-		h.recordFlow(outer.Context(), item)
+		h.recordFlow(item)
 		if closeConnection {
 			return http.StatusOK, totalSent, totalReceived, reason
 		}

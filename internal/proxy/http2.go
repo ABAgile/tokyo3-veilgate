@@ -57,7 +57,7 @@ func (h *Handler) interceptHTTP2(conn *tls.Conn, outer *http.Request, identity *
 			}
 			defer func() {
 				item.Duration = time.Since(started)
-				h.recordFlow(req.Context(), item)
+				h.recordFlow(item)
 			}()
 
 			if err := validateInterceptedRequest(req, host, port); err != nil {
