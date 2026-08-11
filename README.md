@@ -20,8 +20,8 @@ The current development stage provides a deliberately narrow security baseline:
 - short-lived, in-memory interception leaf certificates;
 - host-side, client-and-host-scoped HTTPS header, query, JSON, form, and
   WebSocket JSON secret substitution;
-- response-side configured-secret scrubbing for HTTPS headers, bodies, and
-  WebSocket text/control frames;
+- response-side configured-secret scrubbing for HTTP and HTTPS headers and
+  bodies, plus WebSocket text/control frames;
 - configured OAuth access/refresh-token virtualization with plaintext persisted
   recovery state in `/var/lib/veilgate/auth.json`;
 - flush-preserving SSE and NDJSON response mediation with gzip, deflate,
