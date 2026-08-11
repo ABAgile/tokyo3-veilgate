@@ -190,6 +190,39 @@ func TestProxyForwardsAuthorizedHTTPAndSanitizesCredentials(t *testing.T) {
 	}
 }
 
+func TestProxyMediatesPlainHTTPResponse(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("X-Reflected-Secret", "real-api-key")
+		_, _ = io.WriteString(w, "plain response real-api-key")
+	}))
+	defer upstream.Close()
+
+	store := flow.NewStore(10)
+	h := &Handler{
+		Policy: testPolicy(t), Resolver: fixedResolver{netip.MustParseAddr("93.184.216.34")},
+		Store: store, Secrets: proxyTestBroker(t),
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, upstream.Listener.Addr().String())
+		},
+	}
+	defer h.Close()
+	request := httptest.NewRequest(http.MethodGet, "http://allowed.example/resource", nil)
+	request.Header.Set("Proxy-Authorization", "Bearer 012345678901234567890123")
+	recorder := httptest.NewRecorder()
+	h.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || recorder.Body.String() != "plain response "+testPlaceholder {
+		t.Fatalf("response = %d %q", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("X-Reflected-Secret"); got != testPlaceholder {
+		t.Fatalf("response secret header = %q", got)
+	}
+	items := storedFlows(t, store, 1)
+	if len(items) != 1 || len(items[0].ResponseSecretNames) != 1 || items[0].ResponseSecretNames[0] != "api_key" || items[0].Capture.ResponseBody == nil || items[0].Capture.ResponseBody.Text != "plain response [secret:api_key]" {
+		t.Fatalf("flow = %#v", items)
+	}
+}
+
 func TestProxyBlocksSecretPlaceholderOverPlainHTTP(t *testing.T) {
 	broker, err := secret.New(secret.File{Secrets: []secret.Definition{{
 		Name: "api_key", ValueEnv: "TEST_API_KEY",

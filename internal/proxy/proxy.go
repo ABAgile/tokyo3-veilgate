@@ -331,7 +331,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.SecretNames = discarded.SecretNames
 		f.Trace("secret-policy", "pass", secretTraceDetail(f.SecretNames))
 	}
-	f.Status, f.BytesSent, f.BytesReceived, f.Reason = h.forwardHTTP(w, r, ip, port, &f)
+	f.Status, f.BytesSent, f.BytesReceived, f.Reason = h.forwardHTTP(w, r, ip, port, client.Name, host, &f)
 	if f.Reason != "" {
 		f.Trace("upstream", "fail", f.Reason)
 	} else {
@@ -774,7 +774,7 @@ func validateInterceptedRequest(req *http.Request, host string, port int) error 
 	return nil
 }
 
-func (h *Handler) forwardHTTP(w http.ResponseWriter, r *http.Request, ip netip.Addr, port int, item *flow.Flow) (int, int64, int64, string) {
+func (h *Handler) forwardHTTP(w http.ResponseWriter, r *http.Request, ip netip.Addr, port int, client, host string, item *flow.Flow) (int, int64, int64, string) {
 	resp, sent, err := h.roundTrip(r, ip, port, "http")
 	if err != nil {
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
@@ -782,6 +782,13 @@ func (h *Handler) forwardHTTP(w http.ResponseWriter, r *http.Request, ip netip.A
 	}
 	defer resp.Body.Close()
 	item.UpstreamProtocol = protocolLabel(resp.ProtoMajor, resp.ProtoMinor)
+	if err := h.mediateResponse(resp, client, host, item); err != nil {
+		reason := safeReason(err)
+		item.Trace("response-scrubbing", "fail", reason)
+		http.Error(w, "upstream response failed mediation", http.StatusBadGateway)
+		return http.StatusBadGateway, sent, 0, reason
+	}
+	item.Trace("response-scrubbing", "pass", secretTraceDetail(item.ResponseSecretNames))
 	removeHopHeaders(resp.Header)
 	copyHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
