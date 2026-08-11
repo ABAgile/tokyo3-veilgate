@@ -28,6 +28,11 @@ func TestConsoleAuthenticationAndSanitizedAPI(t *testing.T) {
 	if unauthorized.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized status = %d", unauthorized.Code)
 	}
+	unauthorizedDetail := httptest.NewRecorder()
+	h.ServeHTTP(unauthorizedDetail, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/v1/flows/%d", stored.ID), nil))
+	if unauthorizedDetail.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized detail status = %d", unauthorizedDetail.Code)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flows", nil)
 	req.SetBasicAuth("operator", "secret-password")
