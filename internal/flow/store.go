@@ -506,6 +506,10 @@ func openSQLite(path string, capacity int) (*sqliteStore, error) {
 			}
 		}
 	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS flows_session_idx ON flows(session_id, id DESC)`); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("initialize flow session index: %w", err)
+	}
 	if _, err := db.Exec(`PRAGMA user_version = 4`); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("set flow database version: %w", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -163,6 +164,26 @@ func TestListPagePaginatesAndCompletesSessionParents(t *testing.T) {
 			t.Fatalf("second page HasMore = %v", second.HasMore)
 		}
 		_ = store.Close()
+	}
+}
+
+func TestSQLiteIndexesSessionID(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "flows.db")
+	store, err := Open("sqlite:"+path, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sqlite, ok := store.backend.(*sqliteStore)
+	if !ok {
+		t.Fatal("store is not backed by SQLite")
+	}
+	var definition string
+	if err := sqlite.db.QueryRow(`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = 'flows_session_idx'`).Scan(&definition); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(definition, "session_id") {
+		t.Fatalf("session index definition = %q", definition)
 	}
 }
 
