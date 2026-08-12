@@ -31,6 +31,13 @@ import (
 
 const testPlaceholder = "VEILGATED_SECRET_0123456789abcdef"
 
+func TestCombineBrokersIgnoresTypedNil(t *testing.T) {
+	var broker *secret.Broker
+	if combined := CombineBrokers(broker); combined != nil {
+		t.Fatal("CombineBrokers returned a broker for a typed nil")
+	}
+}
+
 type fixedResolver struct{ address netip.Addr }
 
 func (r fixedResolver) Resolve(context.Context, string) (netip.Addr, error) { return r.address, nil }

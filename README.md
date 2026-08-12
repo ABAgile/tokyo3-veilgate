@@ -127,7 +127,9 @@ automatically receive the `VEILGATED_SECRET_` prefix if not already present:
 }
 ```
 
-Set `VEILGATED_SECRETS_FILE` to enable the broker. Placeholders are replaced
+Set `VEILGATED_SECRETS_FILE` (or place a non-empty file at its default
+`/etc/veilgate/secrets.json` path) to enable the broker. Missing or empty files
+are ignored. Placeholders are replaced
 after client, destination, SNI, Host, DNS, and IP checks pass. Supported
 placements are HTTPS header values, exact query values, exact JSON string
 values, exact form values, and exact JSON string values in outbound WebSocket
@@ -166,7 +168,9 @@ Dynamic OAuth virtualization is configured separately from static
 }
 ```
 
-Set `VEILGATED_OAUTH_FILE` to enable a broker. A successful configured token
+Set `VEILGATED_OAUTH_FILE` (or place a non-empty file at its default
+`/etc/veilgate/oauth.json` path) to enable a broker. Missing or empty files
+are ignored. A successful configured token
 response is rewritten for the sandbox with virtual access and refresh tokens.
 A broker may optionally set `access_placeholder_prefix` when its client
 requires a recognizable access-token shape; the prefix is preserved in the
@@ -210,10 +214,11 @@ token fingerprints may need a specialized adapter and are not transparent under
 this mode.
 
 The checked-in `config/oauth.example.json` is mounted by Compose as an example
-policy, but OAuth brokering is disabled by default. Set the Compose variable
-`VEILGATED_OAUTH_FILE=/etc/veilgate/oauth.json` to enable it. Replace the
-example or provide a deployment-specific OAuth policy before using a real
-issuer; ensure the issuer and API hosts are also allowed by the client policy.
+policy. OAuth brokering is enabled when `VEILGATED_OAUTH_FILE` is set or when
+non-empty `/etc/veilgate/oauth.json` exists. Missing or empty files are
+ignored. Replace the example or provide a deployment-specific OAuth policy
+before using a real issuer; ensure the issuer and API hosts are also allowed by
+the client policy.
 
 ### TLS interception CA
 
@@ -468,17 +473,17 @@ marked omitted in capture.
 
 | Variable | Required | Default | Purpose |
 |---|---:|---|---|
-| `VEILGATED_CLIENTS_FILE` | yes | — | JSON client policy path |
+| `VEILGATED_CLIENTS_FILE` | no | `/etc/veilgate/clients.json` | JSON client policy path |
 | `VEILGATED_ADDR` | no | `127.0.0.1:8080` | HTTPS proxy listen address; proxy TLS is required |
 | `VEILGATED_CONSOLE_ADDR` | no | `127.0.0.1:8081` | HTTPS console and API address |
-| `VEILGATED_CONSOLE_CERT` | no | `config/console.crt` | HTTPS console certificate PEM |
-| `VEILGATED_CONSOLE_KEY` | no | `config/console.key` | Matching HTTPS console private key PEM |
+| `VEILGATED_CONSOLE_CERT` | no | `/etc/veilgate/console.crt` | HTTPS console certificate PEM |
+| `VEILGATED_CONSOLE_KEY` | no | `/etc/veilgate/console.key` | Matching HTTPS console private key PEM |
 | `VEILGATED_CONSOLE_USERNAME` | conditional | — | Console HTTP Basic username; required with the password for non-loopback console addresses |
 | `VEILGATED_CONSOLE_PASSWORD` | conditional | — | Console HTTP Basic password; required with the username for non-loopback console addresses |
 | `VEILGATED_FLOW_RETENTION` | no | `1000` | Retained flow limit, 1–100000 |
-| `VEILGATED_DATABASE_URL` | no | in memory | `sqlite:<path>` durable flow store |
-| `VEILGATED_SECRETS_FILE` | no | disabled | Static secret definitions JSON; requires interception |
-| `VEILGATED_OAUTH_FILE` | no | disabled | OAuth broker policy JSON; requires interception |
+| `VEILGATED_DATABASE_URL` | no | `sqlite:/var/lib/veilgate/flows.db` | `sqlite:<path>` durable flow store |
+| `VEILGATED_SECRETS_FILE` | no | `/etc/veilgate/secrets.json` when non-empty | Static secret definitions JSON; requires interception |
+| `VEILGATED_OAUTH_FILE` | no | `/etc/veilgate/oauth.json` when non-empty | OAuth broker policy JSON; requires interception |
 | `VEILGATED_AUTH_FILE` | no | `/var/lib/veilgate/auth.json` | Plaintext OAuth runtime token state |
 | `VEILGATED_DIAL_TIMEOUT` | no | `10s` | Upstream connection timeout |
 | `VEILGATED_SESSION_IDLE_TIMEOUT` | no | `5m` | Close proxy sessions after inactivity; 1s–24h |
@@ -486,14 +491,18 @@ marked omitted in capture.
 | `VEILGATED_UPSTREAM_RESPONSE_HEADER_TIMEOUT` | no | `30s` | Maximum wait for upstream response headers; 1s–10m |
 | `VEILGATED_CAPTURE_LIMIT_BYTES` | no | `262144` | Maximum retained bytes per capture section; 1024–4194304 |
 | `VEILGATED_MEDIATION_LIMIT_BYTES` | no | `4194304` | Maximum decoded body or WebSocket message; also sizes the intercepted HTTP/2 stream cap; at least capture limit, at most 67108864 |
-| `VEILGATED_INTERCEPT_CA_CERT` | no | disabled | Interception CA certificate PEM |
-| `VEILGATED_INTERCEPT_CA_KEY` | no | disabled | Matching interception CA key PEM |
-| `VEILGATED_PROXY_CERT` | yes | — | HTTPS proxy server certificate PEM |
-| `VEILGATED_PROXY_KEY` | yes | — | Matching HTTPS proxy server private key PEM |
+| `VEILGATED_INTERCEPT_CA_CERT` | no | `/etc/veilgate/intercept-ca.crt` when present | Interception CA certificate PEM |
+| `VEILGATED_INTERCEPT_CA_KEY` | no | `/etc/veilgate/intercept-ca.key` when present | Matching interception CA key PEM |
+| `VEILGATED_PROXY_CERT` | no | `/etc/veilgate/proxy.crt` | HTTPS proxy server certificate PEM |
+| `VEILGATED_PROXY_KEY` | no | `/etc/veilgate/proxy.key` | Matching HTTPS proxy server private key PEM |
 | `VEILGATED_DEBUG_ADDR` | no | disabled | Unauthenticated diagnostics address |
 | `VEILGATED_NATS_URL` | no | disabled | NATS URL for flow audit events |
 | `VEILGATED_NATS_CERT/KEY/CA` | no | workload material | NATS mTLS override |
 | `VEILGATED_WORKLOAD_CERT/KEY/CA` | no | — | Shared Tokyo3 workload material |
+
+The policy and certificate files marked as required remain required material;
+the `no` values mean their environment variables may be omitted when the
+files are at the documented defaults.
 
 Compose variables `VEILGATED_PROXY_PORT` (default `8080`) and
 `VEILGATED_CONSOLE_PORT` (default `8081`) control the sandbox-facing proxy

@@ -17,6 +17,7 @@ import (
 	"net/http/httputil"
 	"net/netip"
 	"net/url"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -77,12 +78,22 @@ type OAuthBroker interface {
 
 // CombineBrokers returns a single broker that applies each non-nil broker in
 // order. It keeps static secrets and dynamic OAuth tokens independently scoped.
+// Typed-nil pointer implementations are ignored as well; optional concrete
+// brokers are commonly converted to this interface before being combined.
 func CombineBrokers(brokers ...SecretBroker) SecretBroker {
 	active := make([]SecretBroker, 0, len(brokers))
 	for _, broker := range brokers {
-		if broker != nil {
-			active = append(active, broker)
+		if broker == nil {
+			continue
 		}
+		value := reflect.ValueOf(broker)
+		switch value.Kind() {
+		case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+			if value.IsNil() {
+				continue
+			}
+		}
+		active = append(active, broker)
 	}
 	if len(active) == 0 {
 		return nil

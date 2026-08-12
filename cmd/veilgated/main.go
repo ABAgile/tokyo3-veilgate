@@ -7,28 +7,35 @@
 // bounded sanitized traffic console. Intercepted HTTP/1.1 and uncompressed
 // WebSocket text traffic can be examined without retaining configured values.
 //
-// Required environment variables:
+// Configuration files are looked up under /etc/veilgate by default and
+// durable runtime state is kept under /var/lib/veilgate. Every path can still
+// be overridden for development or a managed deployment.
 //
-//	VEILGATED_CLIENTS_FILE  JSON client policy path. See config/clients.example.json.
+// Required material (the default paths are used when the variables are unset):
+//
+//	VEILGATED_CLIENTS_FILE  JSON client policy path (default "/etc/veilgate/clients.json").
+//	VEILGATED_PROXY_CERT    HTTPS proxy server certificate PEM (default "/etc/veilgate/proxy.crt").
+//	VEILGATED_PROXY_KEY     Matching HTTPS proxy server private key PEM (default "/etc/veilgate/proxy.key").
 //
 // Optional environment variables:
 //
 //	VEILGATED_ADDR              HTTPS proxy listen address (default "127.0.0.1:8080").
-//	VEILGATED_PROXY_CERT        HTTPS proxy server certificate PEM. Required.
-//	VEILGATED_PROXY_KEY         Matching HTTPS proxy server private key PEM. Required.
 //	VEILGATED_CONSOLE_ADDR      HTTPS console listen address (default "127.0.0.1:8081").
-//	VEILGATED_CONSOLE_CERT      HTTPS console certificate PEM (default "config/console.crt").
-//	VEILGATED_CONSOLE_KEY       Matching HTTPS console private key PEM (default "config/console.key").
+//	VEILGATED_CONSOLE_CERT      HTTPS console certificate PEM (default "/etc/veilgate/console.crt").
+//	VEILGATED_CONSOLE_KEY       Matching HTTPS console private key PEM (default "/etc/veilgate/console.key").
 //	VEILGATED_CONSOLE_USERNAME  HTTP Basic username for the console. Must be set
 //	                            together with VEILGATED_CONSOLE_PASSWORD when
 //	                            VEILGATED_CONSOLE_ADDR is not loopback.
 //	VEILGATED_CONSOLE_PASSWORD  HTTP Basic password for the console.
 //	VEILGATED_FLOW_RETENTION    Number of flows retained (default 1000).
-//	VEILGATED_DATABASE_URL      Optional sqlite:<path> durable flow store. Empty uses
-//	                            bounded in-memory retention.
-//	VEILGATED_SECRETS_FILE      Optional JSON static secret-broker definitions. Requires
-//	                            TLS interception and all referenced host env values.
-//	VEILGATED_OAUTH_FILE        Optional OAuth broker policy. Requires TLS interception.
+//	VEILGATED_DATABASE_URL      sqlite:<path> durable flow store (default
+//	                            "sqlite:/var/lib/veilgate/flows.db").
+//	VEILGATED_SECRETS_FILE      Optional JSON static secret-broker definitions;
+//	                            defaults to "/etc/veilgate/secrets.json" when
+//	                            present and non-empty.
+//	VEILGATED_OAUTH_FILE        Optional OAuth broker policy; defaults to
+//	                            "/etc/veilgate/oauth.json" when present and
+//	                            non-empty.
 //	VEILGATED_AUTH_FILE         Plaintext OAuth token state path (default
 //	                            "/var/lib/veilgate/auth.json"). Keep outside sandbox mounts.
 //	VEILGATED_DIAL_TIMEOUT      Upstream connection timeout (default "10s").
@@ -42,10 +49,11 @@
 //	                            (default 262144; maximum 4194304).
 //	VEILGATED_MEDIATION_LIMIT_BYTES Maximum decoded request, response, or WebSocket
 //	                            message size (default 4194304; maximum 67108864).
-//	VEILGATED_INTERCEPT_CA_CERT Interception CA certificate PEM. Must be set with
-//	                            VEILGATED_INTERCEPT_CA_KEY to enable HTTPS mediation.
-//	VEILGATED_INTERCEPT_CA_KEY  Matching interception CA private key PEM. Loaded at
-//	                            startup and never exposed through the console.
+//	VEILGATED_INTERCEPT_CA_CERT Interception CA certificate PEM; when unset, the
+//	                            default "/etc/veilgate/intercept-ca.crt" is used
+//	                            when that file or its key is present.
+//	VEILGATED_INTERCEPT_CA_KEY  Matching interception CA private key PEM (default
+//	                            "/etc/veilgate/intercept-ca.key" when present).
 //	VEILGATED_DEBUG_ADDR        Optional plaintext diagnostics address. Never expose
 //	                            publicly; it serves unauthenticated profiling.
 //	VEILGATED_NATS_URL          Optional NATS URL for durable audit publication.
@@ -54,8 +62,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -82,7 +92,24 @@ import (
 	"github.com/abagile/veilgate/internal/secret"
 )
 
-const appName = "veilgated"
+const (
+	appName = "veilgated"
+
+	defaultConfigDir = "/etc/veilgate"
+	defaultDataDir   = "/var/lib/veilgate"
+
+	defaultClientsFile   = defaultConfigDir + "/clients.json"
+	defaultSecretsFile   = defaultConfigDir + "/secrets.json"
+	defaultOAuthFile     = defaultConfigDir + "/oauth.json"
+	defaultInterceptCert = defaultConfigDir + "/intercept-ca.crt"
+	defaultInterceptKey  = defaultConfigDir + "/intercept-ca.key"
+	defaultProxyCert     = defaultConfigDir + "/proxy.crt"
+	defaultProxyKey      = defaultConfigDir + "/proxy.key"
+	defaultConsoleCert   = defaultConfigDir + "/console.crt"
+	defaultConsoleKey    = defaultConfigDir + "/console.key"
+	defaultAuthFile      = defaultDataDir + "/auth.json"
+	defaultDatabaseURL   = "sqlite:" + defaultDataDir + "/flows.db"
+)
 
 // Version is overridden at build time with -ldflags "-X main.Version=...".
 var Version = "dev"
@@ -113,10 +140,7 @@ func runServe(ctx context.Context) error {
 	rt := cli.App{Name: appName, EnvPrefix: "VEILGATED"}.Setup(ctx)
 	defer rt.Shutdown()
 
-	policyPath := os.Getenv("VEILGATED_CLIENTS_FILE")
-	if policyPath == "" {
-		return errors.New("VEILGATED_CLIENTS_FILE is required")
-	}
+	policyPath := envutil.Or("VEILGATED_CLIENTS_FILE", defaultClientsFile)
 	policy, err := config.Load(policyPath)
 	if err != nil {
 		return fmt.Errorf("load clients: %w", err)
@@ -199,10 +223,10 @@ func runServe(ctx context.Context) error {
 		return err
 	}
 
-	proxyCertPath := os.Getenv("VEILGATED_PROXY_CERT")
-	proxyKeyPath := os.Getenv("VEILGATED_PROXY_KEY")
-	if proxyCertPath == "" || proxyKeyPath == "" {
-		return errors.New("VEILGATED_PROXY_CERT and VEILGATED_PROXY_KEY are required; the proxy does not serve plaintext HTTP")
+	proxyCertPath := envutil.Or("VEILGATED_PROXY_CERT", defaultProxyCert)
+	proxyKeyPath := envutil.Or("VEILGATED_PROXY_KEY", defaultProxyKey)
+	if !fileExists(proxyCertPath) || !fileExists(proxyKeyPath) {
+		return fmt.Errorf("VEILGATED_PROXY_CERT and VEILGATED_PROXY_KEY are required; provide the certificate and key or create the defaults at %s and %s", defaultProxyCert, defaultProxyKey)
 	}
 	proxyCertificate, err := tls.LoadX509KeyPair(proxyCertPath, proxyKeyPath)
 	if err != nil {
@@ -223,6 +247,10 @@ func runServe(ctx context.Context) error {
 	var interceptionAuthority *intercept.Authority
 	interceptCert := os.Getenv("VEILGATED_INTERCEPT_CA_CERT")
 	interceptKey := os.Getenv("VEILGATED_INTERCEPT_CA_KEY")
+	if interceptCert == "" && interceptKey == "" && (fileExists(defaultInterceptCert) || fileExists(defaultInterceptKey)) {
+		interceptCert = defaultInterceptCert
+		interceptKey = defaultInterceptKey
+	}
 	if (interceptCert == "") != (interceptKey == "") {
 		return errors.New("VEILGATED_INTERCEPT_CA_CERT and VEILGATED_INTERCEPT_CA_KEY must be set together")
 	}
@@ -240,7 +268,7 @@ func runServe(ctx context.Context) error {
 	}
 
 	var secretBroker *secret.Broker
-	if secretsPath := os.Getenv("VEILGATED_SECRETS_FILE"); secretsPath != "" {
+	if secretsPath := optionalPolicyFile("VEILGATED_SECRETS_FILE", defaultSecretsFile, "secrets"); secretsPath != "" {
 		if interceptionAuthority == nil {
 			return errors.New("VEILGATED_SECRETS_FILE requires TLS interception CA material")
 		}
@@ -252,11 +280,11 @@ func runServe(ctx context.Context) error {
 	}
 
 	var oauthBroker *oauth.Broker
-	if oauthPath := os.Getenv("VEILGATED_OAUTH_FILE"); oauthPath != "" {
+	if oauthPath := optionalPolicyFile("VEILGATED_OAUTH_FILE", defaultOAuthFile, "brokers"); oauthPath != "" {
 		if interceptionAuthority == nil {
 			return errors.New("VEILGATED_OAUTH_FILE requires TLS interception CA material")
 		}
-		authPath := envutil.Or("VEILGATED_AUTH_FILE", "/var/lib/veilgate/auth.json")
+		authPath := envutil.Or("VEILGATED_AUTH_FILE", defaultAuthFile)
 		oauthBroker, err = oauth.Load(oauthPath, authPath)
 		if err != nil {
 			return fmt.Errorf("load OAuth broker: %w", err)
@@ -264,25 +292,30 @@ func runServe(ctx context.Context) error {
 		rt.Log.Warn("OAuth broker enabled with plaintext auth state", "config", oauthPath, "auth_state", authPath, "encryption", "disabled")
 	}
 	broker := proxy.CombineBrokers(secretBroker, oauthBroker)
+	var interceptor proxy.Interceptor
+	if interceptionAuthority != nil {
+		interceptor = interceptionAuthority
+	}
+	var oauthHandler proxy.OAuthBroker
+	if oauthBroker != nil {
+		oauthHandler = oauthBroker
+	}
 
-	store, err := flow.Open(rt.DB.URL, retention)
+	databaseURL := envutil.Or("VEILGATED_DATABASE_URL", defaultDatabaseURL)
+	store, err := flow.Open(databaseURL, retention)
 	if err != nil {
 		return fmt.Errorf("open flow store: %w", err)
 	}
 	defer guard.Close(store)
-	if rt.DB.URL == "" {
-		rt.Log.Warn("VEILGATED_DATABASE_URL not set; flow retention is in memory")
-	} else {
-		rt.Log.Info("durable flow store enabled")
-	}
+	rt.Log.Info("durable flow store enabled", "database", databaseURL)
 	proxyHandler := &proxy.Handler{
 		Policy:                        policy,
 		Resolver:                      proxy.PublicResolver{},
 		Store:                         store,
 		Log:                           rt.Log,
-		Interceptor:                   interceptionAuthority,
+		Interceptor:                   interceptor,
 		Secrets:                       broker,
-		OAuth:                         oauthBroker,
+		OAuth:                         oauthHandler,
 		DialTimeout:                   dialTimeout,
 		SessionIdleTimeout:            sessionIdleTimeout,
 		SessionMaxDuration:            sessionMaxDuration,
@@ -308,8 +341,8 @@ func runServe(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	consoleCertPath := envutil.Or("VEILGATED_CONSOLE_CERT", "config/console.crt")
-	consoleKeyPath := envutil.Or("VEILGATED_CONSOLE_KEY", "config/console.key")
+	consoleCertPath := envutil.Or("VEILGATED_CONSOLE_CERT", defaultConsoleCert)
+	consoleKeyPath := envutil.Or("VEILGATED_CONSOLE_KEY", defaultConsoleKey)
 	consoleCertificate, err := tls.LoadX509KeyPair(consoleCertPath, consoleKeyPath)
 	if err != nil {
 		return fmt.Errorf("load HTTPS console certificate: %w", err)
@@ -347,6 +380,50 @@ func runServe(ctx context.Context) error {
 		run.HTTPServer(proxyServer, 10*time.Second, true),
 		run.HTTPServer(consoleServer, 10*time.Second, true),
 	)
+}
+
+func optionalPolicyFile(envName, fallback, collection string) string {
+	path := os.Getenv(envName)
+	if path == "" {
+		path = fallback
+	}
+	if !fileExists(path) {
+		return ""
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		// Keep the path so the loader returns the useful permission/read error.
+		return path
+	}
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 {
+		return ""
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(data, &document); err != nil {
+		// Non-empty malformed input remains a startup error.
+		return path
+	}
+	if len(document) == 0 {
+		return ""
+	}
+	if len(document) != 1 {
+		return path
+	}
+	entries, ok := document[collection]
+	if !ok {
+		return path
+	}
+	var values []json.RawMessage
+	if err := json.Unmarshal(entries, &values); err == nil && len(values) == 0 {
+		return ""
+	}
+	return path
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }
 
 func validateConsoleAuth(addr, username, password string) error {
@@ -396,8 +473,8 @@ func caCmd() *cobra.Command {
 			return nil
 		},
 	}
-	initCmd.Flags().StringVar(&certPath, "cert", "config/intercept-ca.crt", "certificate output path")
-	initCmd.Flags().StringVar(&keyPath, "key", "config/intercept-ca.key", "private-key output path")
+	initCmd.Flags().StringVar(&certPath, "cert", defaultInterceptCert, "certificate output path")
+	initCmd.Flags().StringVar(&keyPath, "key", defaultInterceptKey, "private-key output path")
 
 	var caCertPath, caKeyPath, proxyCertPath, proxyKeyPath string
 	var proxySANs []string
@@ -412,10 +489,10 @@ func caCmd() *cobra.Command {
 			return nil
 		},
 	}
-	signCmd.Flags().StringVar(&caCertPath, "ca-cert", "config/intercept-ca.crt", "interception CA certificate path")
-	signCmd.Flags().StringVar(&caKeyPath, "ca-key", "config/intercept-ca.key", "interception CA private-key path")
-	signCmd.Flags().StringVar(&proxyCertPath, "cert", "config/proxy.crt", "proxy certificate output path")
-	signCmd.Flags().StringVar(&proxyKeyPath, "key", "config/proxy.key", "proxy private-key output path")
+	signCmd.Flags().StringVar(&caCertPath, "ca-cert", defaultInterceptCert, "interception CA certificate path")
+	signCmd.Flags().StringVar(&caKeyPath, "ca-key", defaultInterceptKey, "interception CA private-key path")
+	signCmd.Flags().StringVar(&proxyCertPath, "cert", defaultProxyCert, "proxy certificate output path")
+	signCmd.Flags().StringVar(&proxyKeyPath, "key", defaultProxyKey, "proxy private-key output path")
 	signCmd.Flags().StringSliceVar(&proxySANs, "san", intercept.DefaultProxySANs(), "proxy certificate SANs as DNS:name or IP:address values")
 
 	ca.AddCommand(initCmd, signCmd)

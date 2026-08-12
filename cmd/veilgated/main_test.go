@@ -62,6 +62,45 @@ func TestValidateConsoleAuth(t *testing.T) {
 	}
 }
 
+func TestOptionalPolicyFileSkipsMissingAndEmptyPolicies(t *testing.T) {
+	dir := t.TempDir()
+	for _, test := range []struct {
+		name       string
+		data       string
+		collection string
+		wantEmpty  bool
+	}{
+		{name: "zero length", data: "", collection: "secrets", wantEmpty: true},
+		{name: "whitespace", data: " \n\t", collection: "secrets", wantEmpty: true},
+		{name: "empty object", data: `{}`, collection: "secrets", wantEmpty: true},
+		{name: "empty secrets", data: `{"secrets":[]}`, collection: "secrets", wantEmpty: true},
+		{name: "empty brokers", data: `{"brokers":null}`, collection: "brokers", wantEmpty: true},
+		{name: "configured secrets", data: `{"secrets":[{}]}`, collection: "secrets"},
+		{name: "malformed", data: `{`, collection: "secrets"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(dir, test.name+".json")
+			if err := os.WriteFile(path, []byte(test.data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			envName := "VEILGATED_SECRETS_FILE"
+			if test.collection == "brokers" {
+				envName = "VEILGATED_OAUTH_FILE"
+			}
+			t.Setenv(envName, "")
+			got := optionalPolicyFile(envName, path, test.collection)
+			if (got == "") != test.wantEmpty {
+				t.Fatalf("optionalPolicyFile() = %q, wantEmpty %v", got, test.wantEmpty)
+			}
+		})
+	}
+
+	t.Setenv("VEILGATED_SECRETS_FILE", filepath.Join(dir, "missing.json"))
+	if got := optionalPolicyFile("VEILGATED_SECRETS_FILE", filepath.Join(dir, "unused.json"), "secrets"); got != "" {
+		t.Fatalf("missing policy path = %q, want empty", got)
+	}
+}
+
 func TestRunServeValidatesConfigurationBeforeStarting(t *testing.T) {
 	policyPath := filepath.Join(t.TempDir(), "clients.json")
 	if err := os.WriteFile(policyPath, []byte(`{"clients":[{"name":"agent","token":"012345678901234567890123","allowed_hosts":["example.com"]}]}`), 0o600); err != nil {
