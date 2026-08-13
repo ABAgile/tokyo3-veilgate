@@ -509,6 +509,8 @@ marked omitted in capture.
 | `VEILGATED_UPSTREAM_RESPONSE_HEADER_TIMEOUT` | no | `60s` | Maximum wait for upstream response headers; 1s–10m |
 | `VEILGATED_CAPTURE_LIMIT_BYTES` | no | `262144` | Maximum retained bytes per capture section; 1024–4194304 |
 | `VEILGATED_MEDIATION_LIMIT_BYTES` | no | `4194304` | Maximum decoded body or WebSocket message; also sizes the intercepted HTTP/2 stream cap; at least capture limit, at most 67108864 |
+| `VEILGATED_RECORD_QUEUE_CAPACITY` | no | `256` | Completed flows buffered for asynchronous recording; at least 1 |
+| `VEILGATED_RECORD_WORKERS` | no | `4` | Concurrent flow-recording workers; at least 1 |
 | `VEILGATED_INTERCEPT_CA_CERT` | no | `/etc/veilgate/intercept-ca.crt` when present | Interception CA certificate PEM |
 | `VEILGATED_INTERCEPT_CA_KEY` | no | `/etc/veilgate/intercept-ca.key` when present | Matching interception CA key PEM |
 | `VEILGATED_PROXY_CERT` | no | `/etc/veilgate/proxy.crt` | HTTPS proxy server certificate PEM |

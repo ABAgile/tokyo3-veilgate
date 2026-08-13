@@ -49,6 +49,10 @@
 //	                            (default 262144; maximum 4194304).
 //	VEILGATED_MEDIATION_LIMIT_BYTES Maximum decoded request, response, or WebSocket
 //	                            message size (default 4194304; maximum 67108864).
+//	VEILGATED_RECORD_QUEUE_CAPACITY Number of completed flows buffered for recording
+//	                            (default 256; minimum 1).
+//	VEILGATED_RECORD_WORKERS    Number of concurrent flow-recording workers
+//	                            (default 4; minimum 1).
 //	VEILGATED_INTERCEPT_CA_CERT Interception CA certificate PEM; when unset, the
 //	                            default "/etc/veilgate/intercept-ca.crt" is used
 //	                            when that file or its key is present.
@@ -215,6 +219,26 @@ func runServe(ctx context.Context) error {
 	if mediationLimit < captureLimit || mediationLimit > 64<<20 {
 		return errors.New("VEILGATED_MEDIATION_LIMIT_BYTES must be at least the capture limit and at most 67108864")
 	}
+	recordQueueCapacity, err := envutil.Int("VEILGATED_RECORD_QUEUE_CAPACITY")
+	if err != nil {
+		return err
+	}
+	if recordQueueCapacity == 0 {
+		recordQueueCapacity = 256
+	}
+	if recordQueueCapacity < 1 {
+		return errors.New("VEILGATED_RECORD_QUEUE_CAPACITY must be at least 1")
+	}
+	recordWorkers, err := envutil.Int("VEILGATED_RECORD_WORKERS")
+	if err != nil {
+		return err
+	}
+	if recordWorkers == 0 {
+		recordWorkers = 4
+	}
+	if recordWorkers < 1 {
+		return errors.New("VEILGATED_RECORD_WORKERS must be at least 1")
+	}
 
 	consoleAddr := envutil.Or("VEILGATED_CONSOLE_ADDR", "127.0.0.1:8081")
 	consoleUser := os.Getenv("VEILGATED_CONSOLE_USERNAME")
@@ -318,6 +342,8 @@ func runServe(ctx context.Context) error {
 		UpstreamResponseHeaderTimeout: responseHeaderTimeout,
 		CaptureLimit:                  int64(captureLimit),
 		MediationLimit:                int64(mediationLimit),
+		RecordQueueCapacity:           recordQueueCapacity,
+		RecordWorkers:                 recordWorkers,
 		Record: func(ctx context.Context, item flow.Flow) {
 			entry := audit.Entry{
 				Time: item.StartedAt, FlowID: item.ID, SessionID: item.SessionID, Client: item.Client,

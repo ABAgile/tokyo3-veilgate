@@ -41,8 +41,8 @@ type flowRecordJob struct {
 }
 
 const (
-	recordQueueCapacity          = 16
-	recordWorkerCount            = 2
+	defaultRecordQueueCapacity   = 256
+	defaultRecordWorkerCount     = 4
 	recordDeniedEnqueueTimeout   = 100 * time.Millisecond
 	recordDropNoticeInterval     = 10 * time.Second
 	recordShutdownTimeout        = 5 * time.Second
@@ -203,6 +203,8 @@ type Handler struct {
 	UpstreamResponseHeaderTimeout time.Duration
 	CaptureLimit                  int64
 	MediationLimit                int64
+	RecordQueueCapacity           int
+	RecordWorkers                 int
 	DialContext                   func(context.Context, string, string) (net.Conn, error)
 
 	transportMu        sync.Mutex
@@ -219,6 +221,20 @@ type Handler struct {
 	recordSubmitWG     sync.WaitGroup
 	recordDropped      atomic.Uint64
 	recordDropNoticeAt atomic.Int64
+}
+
+func (h *Handler) recordQueueCapacity() int {
+	if h.RecordQueueCapacity > 0 {
+		return h.RecordQueueCapacity
+	}
+	return defaultRecordQueueCapacity
+}
+
+func (h *Handler) recordWorkerCount() int {
+	if h.RecordWorkers > 0 {
+		return h.RecordWorkers
+	}
+	return defaultRecordWorkerCount
 }
 
 func (h *Handler) sessionIdleTimeout() time.Duration {
@@ -362,14 +378,14 @@ func (h *Handler) recordFlow(item flow.Flow) {
 		return
 	}
 	if h.recordQueue == nil {
-		h.recordQueue = make(chan flowRecordJob, recordQueueCapacity)
+		h.recordQueue = make(chan flowRecordJob, h.recordQueueCapacity())
 		h.recordContext, h.recordCancel = context.WithCancel(context.Background())
 		log := h.Log
 		if log == nil {
 			log = slog.Default()
 		}
 		queue := h.recordQueue
-		for range recordWorkerCount {
+		for range h.recordWorkerCount() {
 			h.recordWG.Add(1)
 			guard.Go(log, "record flows", func() {
 				defer h.recordWG.Done()

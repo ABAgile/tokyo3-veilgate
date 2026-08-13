@@ -31,6 +31,8 @@ services:
       # VEILGATED_UPSTREAM_RESPONSE_HEADER_TIMEOUT: 60s
       # VEILGATED_CAPTURE_LIMIT_BYTES: 262144
       # VEILGATED_MEDIATION_LIMIT_BYTES: 4194304
+      # VEILGATED_RECORD_QUEUE_CAPACITY: 256
+      # VEILGATED_RECORD_WORKERS: 4
       # These certificate paths are also daemon defaults; set them only when
       # the mounted filenames differ.
       # VEILGATED_INTERCEPT_CA_CERT: /etc/veilgate/intercept-ca.crt

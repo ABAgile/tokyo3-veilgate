@@ -110,6 +110,7 @@ func TestRunServeValidatesConfigurationBeforeStarting(t *testing.T) {
 		"VEILGATED_FLOW_RETENTION", "VEILGATED_DIAL_TIMEOUT", "VEILGATED_SESSION_IDLE_TIMEOUT",
 		"VEILGATED_SESSION_MAX_DURATION", "VEILGATED_UPSTREAM_RESPONSE_HEADER_TIMEOUT",
 		"VEILGATED_CAPTURE_LIMIT_BYTES", "VEILGATED_MEDIATION_LIMIT_BYTES",
+		"VEILGATED_RECORD_QUEUE_CAPACITY", "VEILGATED_RECORD_WORKERS",
 		"VEILGATED_CONSOLE_ADDR", "VEILGATED_CONSOLE_USERNAME", "VEILGATED_CONSOLE_PASSWORD",
 		"VEILGATED_PROXY_CERT", "VEILGATED_PROXY_KEY",
 	}
@@ -126,6 +127,8 @@ func TestRunServeValidatesConfigurationBeforeStarting(t *testing.T) {
 		{name: "response header timeout bounds", env: map[string]string{"VEILGATED_UPSTREAM_RESPONSE_HEADER_TIMEOUT": "500ms"}, want: "between 1s and 10m"},
 		{name: "capture bounds", env: map[string]string{"VEILGATED_CAPTURE_LIMIT_BYTES": "512"}, want: "between 1024 and 4194304"},
 		{name: "mediation contains capture", env: map[string]string{"VEILGATED_CAPTURE_LIMIT_BYTES": "1024", "VEILGATED_MEDIATION_LIMIT_BYTES": "512"}, want: "at least the capture limit"},
+		{name: "record queue capacity bounds", env: map[string]string{"VEILGATED_RECORD_QUEUE_CAPACITY": "-1"}, want: "at least 1"},
+		{name: "record workers bounds", env: map[string]string{"VEILGATED_RECORD_WORKERS": "-1"}, want: "at least 1"},
 		{name: "remote console credentials", env: map[string]string{"VEILGATED_CONSOLE_ADDR": "0.0.0.0:8081"}, want: "VEILGATED_CONSOLE_USERNAME and VEILGATED_CONSOLE_PASSWORD are required"},
 		{name: "proxy certificate required", env: nil, want: "VEILGATED_PROXY_CERT"},
 	} {

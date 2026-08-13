@@ -88,23 +88,23 @@ func TestCloseWaitsForFlowRecording(t *testing.T) {
 }
 
 func TestRecordQueueDropsInsteadOfBlocking(t *testing.T) {
-	entered := make(chan struct{}, recordWorkerCount)
+	entered := make(chan struct{}, defaultRecordWorkerCount)
 	release := make(chan struct{})
 	var callbacks atomic.Int32
 	var logs bytes.Buffer
 	h := &Handler{
 		Log: slog.New(slog.NewTextHandler(&logs, nil)),
 		Record: func(context.Context, flow.Flow) {
-			if callbacks.Add(1) <= recordWorkerCount {
+			if callbacks.Add(1) <= defaultRecordWorkerCount {
 				entered <- struct{}{}
 				<-release
 			}
 		},
 	}
-	for range recordQueueCapacity + recordWorkerCount {
+	for range defaultRecordQueueCapacity + defaultRecordWorkerCount {
 		h.recordFlow(flow.Flow{Host: "example.com"})
 	}
-	for range recordWorkerCount {
+	for range defaultRecordWorkerCount {
 		select {
 		case <-entered:
 		case <-time.After(time.Second):
@@ -129,26 +129,26 @@ func TestRecordQueueDropsInsteadOfBlocking(t *testing.T) {
 }
 
 func TestDeniedRecordWaitsForQueueCapacity(t *testing.T) {
-	entered := make(chan struct{}, recordWorkerCount)
+	entered := make(chan struct{}, defaultRecordWorkerCount)
 	release := make(chan struct{})
 	var callbacks atomic.Int32
 	h := &Handler{Record: func(context.Context, flow.Flow) {
-		if callbacks.Add(1) <= recordWorkerCount {
+		if callbacks.Add(1) <= defaultRecordWorkerCount {
 			entered <- struct{}{}
 			<-release
 		}
 	}}
-	for range recordWorkerCount {
+	for range defaultRecordWorkerCount {
 		h.recordFlow(flow.Flow{Decision: "allowed"})
 	}
-	for range recordWorkerCount {
+	for range defaultRecordWorkerCount {
 		select {
 		case <-entered:
 		case <-time.After(time.Second):
 			t.Fatal("record workers did not start")
 		}
 	}
-	for range recordQueueCapacity {
+	for range defaultRecordQueueCapacity {
 		h.recordFlow(flow.Flow{Decision: "allowed"})
 	}
 
