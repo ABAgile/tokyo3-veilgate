@@ -464,7 +464,8 @@
       reqHeadCount++;
     }
     if (capture.request_body) {
-      appendCaptureSection(requestBody, "Request body", capture.request_body.content_type, capture.request_body.text, capture.request_body.omitted);
+      const requestBodyTruncated = capture.request_body.truncated || Boolean(capture.truncated && capture.request_body.text);
+      appendCaptureSection(requestBody, "Request body", capture.request_body.content_type, capture.request_body.text, capture.request_body.omitted, requestBodyTruncated);
       reqBodyCount++;
     }
     if ((capture.response_headers || []).length) {
@@ -472,7 +473,8 @@
       respHeadCount++;
     }
     if (capture.response_body) {
-      appendCaptureSection(responseBody, "Response body", capture.response_body.content_type, capture.response_body.text, capture.response_body.omitted);
+      const responseBodyTruncated = capture.response_body.truncated || Boolean(capture.truncated && capture.response_body.text);
+      appendCaptureSection(responseBody, "Response body", capture.response_body.content_type, capture.response_body.text, capture.response_body.omitted, responseBodyTruncated);
       respBodyCount++;
     }
     websocketCount += appendWebSocketCapture(websocket, capture.websocket_messages || []);
@@ -714,7 +716,7 @@
     container.appendChild(section);
   }
 
-  function appendCaptureSection(container, title, contentType, text, omitted) {
+  function appendCaptureSection(container, title, contentType, text, omitted, truncated = false) {
     const section = document.createElement("section");
     const headingRow = document.createElement("div");
     const heading = document.createElement("h4");
@@ -725,7 +727,7 @@
     meta.textContent = contentType || "Content type unavailable";
     headingRow.appendChild(heading);
     const raw = text || "";
-    const formatted = omitted ? null : window.VeilgateCaptureFormatters.format(contentType, raw);
+    const formatted = omitted ? null : window.VeilgateCaptureFormatters.format(contentType, raw, truncated);
     const readableStrings = formatted?.previews?.length ? appendReadableStringPreviews(formatted.previews) : null;
     if (formatted) {
       const toggle = document.createElement("button");
@@ -764,7 +766,7 @@
       const pre = document.createElement("pre");
       item.className = "readable-string";
       label.className = "readable-string-label";
-      label.textContent = `${preview.path} · ${preview.lines} ${preview.lines === 1 ? "line" : "lines"} · ${preview.text.length} characters`;
+      label.textContent = `${preview.path} · ${preview.lines} ${preview.lines === 1 ? "line" : "lines"} · ${preview.text.length} characters${preview.partial ? " · partial capture" : ""}`;
       pre.textContent = preview.text;
       item.append(label, pre);
       list.appendChild(item);

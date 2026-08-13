@@ -76,6 +76,19 @@ test("extracts readable previews from JSON in SSE data fields", () => {
   );
 });
 
+test("extracts a partial multiline JSON string from a truncated SSE event", () => {
+  const formatted = formatters.format(
+    "text/event-stream",
+    `data: {"message":"${"line one\\nline two\\n".repeat(30)}`,
+    true,
+  );
+
+  assert.equal(formatted.previews.length, 1);
+  assert.equal(formatted.previews[0].path, "event 1.message");
+  assert.equal(formatted.previews[0].partial, true);
+  assert.match(formatted.previews[0].text, /line one\nline two/);
+});
+
 test("skips encrypted content from readable previews without changing JSON", () => {
   const raw = JSON.stringify({
     encrypted_content: "ciphertext".repeat(40),

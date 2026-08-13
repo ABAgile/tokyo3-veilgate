@@ -46,7 +46,7 @@
 //	VEILGATED_UPSTREAM_RESPONSE_HEADER_TIMEOUT Maximum wait for upstream response
 //	                            headers (default "60s").
 //	VEILGATED_CAPTURE_LIMIT_BYTES Maximum retained content per capture section
-//	                            (default 262144; maximum 4194304).
+//	                            (default 1048576; maximum 4194304).
 //	VEILGATED_MEDIATION_LIMIT_BYTES Maximum decoded request, response, or WebSocket
 //	                            message size (default 4194304; maximum 67108864).
 //	VEILGATED_RECORD_QUEUE_CAPACITY Number of completed flows buffered for recording
@@ -204,7 +204,7 @@ func runServe(ctx context.Context) error {
 		return err
 	}
 	if captureLimit == 0 {
-		captureLimit = 256 << 10
+		captureLimit = 1 << 20
 	}
 	if captureLimit < 1024 || captureLimit > 4<<20 {
 		return errors.New("VEILGATED_CAPTURE_LIMIT_BYTES must be between 1024 and 4194304")

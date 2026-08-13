@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	defaultCaptureLimit   int64 = 256 << 10
+	defaultCaptureLimit   int64 = 1 << 20
 	defaultMediationLimit int64 = 4 << 20
 )
 
@@ -146,7 +146,8 @@ func (h *Handler) substituteBody(contentType string, body []byte, client, host s
 		}
 	}
 	if h.Secrets != nil {
-		return h.Secrets.SubstituteBody(contentType, body, client, host, secure)
+		transformed, names, brokerSupported, err := h.Secrets.SubstituteBody(contentType, body, client, host, secure)
+		return transformed, names, supported || brokerSupported, err
 	}
 	return body, nil, supported, nil
 }
@@ -198,8 +199,12 @@ func (h *Handler) mediateResponse(resp *http.Response, client, host string, item
 	if resp.Request != nil {
 		redactions = sensitiveHeaderValues(resp.Request.Header)
 	}
+	responseContentType := resp.Header.Get("Content-Type")
+	if strings.TrimSpace(responseContentType) == "" {
+		responseContentType = inferResponseContentType(body)
+	}
 	var bodyTruncated bool
-	item.Capture.ResponseBody, bodyTruncated = capturePayload(resp.Header.Get("Content-Type"), body, responseCaptureMediaType(resp.Header.Get("Content-Type")), h.Secrets, redactions, h.captureLimit())
+	item.Capture.ResponseBody, bodyTruncated = capturePayload(responseContentType, body, responseCaptureMediaType(responseContentType), h.Secrets, redactions, h.captureLimit())
 	item.Capture.Truncated = item.Capture.Truncated || bodyTruncated
 	replaceResponseBody(resp, encoded)
 	var truncated bool
@@ -316,6 +321,7 @@ func capturePayload(contentType string, body []byte, supported bool, broker Secr
 		}
 	}
 	capture.Text = string(clean)
+	capture.Truncated = truncated
 	return capture, truncated
 }
 
@@ -346,7 +352,7 @@ func jsonValidOne(body []byte) bool {
 
 func requestCaptureMediaType(contentType string) bool {
 	value := mediaType(contentType)
-	return value == "application/json" || strings.HasSuffix(value, "+json") || value == "application/x-www-form-urlencoded"
+	return value == "text/event-stream" || value == "application/json" || strings.HasSuffix(value, "+json") || value == "application/x-www-form-urlencoded"
 }
 
 func responseCaptureMediaType(contentType string) bool {
@@ -354,6 +360,17 @@ func responseCaptureMediaType(contentType string) bool {
 	return strings.HasPrefix(value, "text/") || value == "application/json" || strings.HasSuffix(value, "+json") ||
 		value == "application/x-www-form-urlencoded" || value == "application/xml" || strings.HasSuffix(value, "+xml") ||
 		value == "application/javascript"
+}
+
+func inferResponseContentType(body []byte) string {
+	trimmed := strings.TrimSpace(string(body))
+	if strings.HasPrefix(trimmed, "data:") || strings.Contains(trimmed, "\ndata:") {
+		return "text/event-stream"
+	}
+	if jsonValidOne(body) {
+		return "application/json"
+	}
+	return ""
 }
 
 func mediaType(contentType string) string {

@@ -402,11 +402,15 @@ a cyan leading rule.
   Query and body content uses the code typography in a bordered,
   preformatted card with wrapping and selectable text. Each section has a
   visible content-type label and an explicit empty, omitted, or truncated state.
+  When an upstream response omits `Content-Type`, valid SSE and JSON bodies may
+  be conservatively inferred for capture; the wire headers are never rewritten.
   Text is inserted as text content, never interpreted as markup. Multiline JSON
   string previews decode display-only escape sequences without changing the
-  retained or Raw representation; incomplete or truncated string tokens do not
-  produce a preview. The same extraction covers structured JSON in
-  JSONL/NDJSON records and Server-Sent Events `data:` fields. WebSocket messages
+  retained or Raw representation; complete captures never produce previews
+  from incomplete string tokens, while truncated captures may expose a clearly
+  labeled partial preview when a readable string prefix is available. The same
+  extraction covers structured JSON in JSONL/NDJSON records and Server-Sent
+  Events `data:` fields. WebSocket messages
   identify client-to-upstream or upstream-to-client direction and retain
   chronological order; binary messages show metadata only. The WebSocket navigator filters and searches the retained
   sanitized text, labels JSON event types, summarizes only contiguous compatible
@@ -447,8 +451,9 @@ relying on column position alone.
   exact retained raw representation.
 - **Do** provide readable previews for long or multiline JSON strings without
   replacing the lexical JSON code view, including JSON in JSONL/NDJSON records
-  and Server-Sent Events `data:` fields, except for `encrypted_content` fields
-  that are not useful as human-readable text.
+  and Server-Sent Events `data:` fields. Label previews derived from truncated
+  captures as partial, and skip `encrypted_content` fields that are not useful
+  as human-readable text.
 - **Do** let operators search, filter, summarize, and expand high-volume
   WebSocket streams without losing chronological raw messages.
 - **Do** keep the flow list at full height and anchor the detail drawer to its

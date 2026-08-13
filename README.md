@@ -485,7 +485,9 @@ are never persisted. Because a rejected frame drops the connection rather than
 returning a status, the placeholder names involved are recorded on the flow and
 in the failure reason so the drop is attributable; values are never included.
 Unsupported HTTP binary response bodies are scrubbed before forwarding but
-marked omitted in capture.
+marked omitted in capture. When an upstream response omits `Content-Type`, Veilgate
+conservatively recognizes valid SSE or JSON bodies for capture; other bodies
+remain omitted.
 
 ## Environment
 
@@ -507,7 +509,7 @@ marked omitted in capture.
 | `VEILGATED_SESSION_IDLE_TIMEOUT` | no | `5m` | Close proxy sessions after inactivity; 1s–24h |
 | `VEILGATED_SESSION_MAX_DURATION` | no | `30m` | Maximum proxy request/session lifetime; at most 168h |
 | `VEILGATED_UPSTREAM_RESPONSE_HEADER_TIMEOUT` | no | `60s` | Maximum wait for upstream response headers; 1s–10m |
-| `VEILGATED_CAPTURE_LIMIT_BYTES` | no | `262144` | Maximum retained bytes per capture section; 1024–4194304 |
+| `VEILGATED_CAPTURE_LIMIT_BYTES` | no | `1048576` | Maximum retained bytes per capture section; 1024–4194304 |
 | `VEILGATED_MEDIATION_LIMIT_BYTES` | no | `4194304` | Maximum decoded body or WebSocket message; also sizes the intercepted HTTP/2 stream cap; at least capture limit, at most 67108864 |
 | `VEILGATED_RECORD_QUEUE_CAPACITY` | no | `256` | Completed flows buffered for asynchronous recording; at least 1 |
 | `VEILGATED_RECORD_WORKERS` | no | `4` | Concurrent flow-recording workers; at least 1 |

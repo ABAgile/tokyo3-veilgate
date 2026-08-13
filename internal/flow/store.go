@@ -27,11 +27,14 @@ type PolicyStep struct {
 }
 
 // PayloadCapture is one bounded textual HTTP payload. Omitted identifies a
-// binary or unsupported media type whose content was deliberately not stored.
+// binary or unsupported media type whose content was deliberately not stored;
+// Truncated identifies a supported payload whose retained text hit the capture
+// limit.
 type PayloadCapture struct {
 	ContentType string `json:"content_type,omitempty"`
 	Text        string `json:"text,omitempty"`
 	Omitted     bool   `json:"omitted,omitempty"`
+	Truncated   bool   `json:"truncated,omitempty"`
 }
 
 // HeaderCapture is one sanitized HTTP header with all retained values.

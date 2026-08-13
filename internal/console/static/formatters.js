@@ -39,15 +39,15 @@
     }
   ];
 
-  function format(contentType, raw) {
+  function format(contentType, raw, truncated = false) {
     if (!raw) return null;
     const mediaType = (contentType || "").split(";", 1)[0].trim().toLowerCase();
     for (const plugin of plugins) {
       if (!plugin.matches(mediaType, raw)) continue;
       try {
         const result = {label: plugin.label, language: plugin.language, text: plugin.format(raw)};
-        if (plugin.language === "json") result.previews = readableJSONStrings(raw, plugin.jsonLines);
-        else if (plugin.readableJSON) result.previews = plugin.readableJSON(raw);
+        if (plugin.language === "json") result.previews = readableJSONStrings(raw, plugin.jsonLines, truncated);
+        else if (plugin.readableJSON) result.previews = plugin.readableJSON(raw, truncated);
         return result;
       } catch {
         return null;
@@ -56,14 +56,14 @@
     return null;
   }
 
-  function readableJSONStrings(raw, jsonLines) {
+  function readableJSONStrings(raw, jsonLines, truncated) {
     const sources = jsonLines
       ? raw.split(/\r?\n/).map((line, index) => line.trim() ? {text: line, path: `line ${index + 1}`} : null).filter(Boolean)
       : [{text: raw, path: "$"}];
-    return readableJSONSources(sources);
+    return readableJSONSources(sources, truncated);
   }
 
-  function readableSSEJSONStrings(raw) {
+  function readableSSEJSONStrings(raw, truncated) {
     const sources = [];
     let dataLines = [];
     let eventNumber = 0;
@@ -82,22 +82,105 @@
       if (match) dataLines.push(match[1]);
     }
     flush();
-    return readableJSONSources(sources);
+    return readableJSONSources(sources, truncated);
   }
 
-  function readableJSONSources(sources) {
+  function readableJSONSources(sources, truncated) {
     const previews = [];
     for (const source of sources) {
       let value;
       try {
         value = JSON.parse(source.text);
+        collectReadableJSONStrings(value, source.path, previews);
       } catch {
-        continue;
+        if (truncated) collectPartialJSONStrings(source.text, source.path, previews);
       }
-      collectReadableJSONStrings(value, source.path, previews);
       if (previews.length >= maxReadableStringPreviews) break;
     }
     return previews;
+  }
+
+  function collectPartialJSONStrings(raw, basePath, previews) {
+    let offset = 0;
+
+    const skipWhitespace = () => {
+      while (offset < raw.length && /\s/.test(raw[offset])) offset++;
+    };
+    const parseString = () => {
+      const start = offset;
+      if (raw[offset] !== '"') return null;
+      offset++;
+      let escaped = false;
+      let closed = false;
+      while (offset < raw.length) {
+        const character = raw[offset++];
+        if (escaped) {
+          escaped = false;
+        } else if (character === "\\") {
+          escaped = true;
+        } else if (character === '"') {
+          closed = true;
+          break;
+        }
+      }
+      const token = raw.slice(start, offset);
+      let value;
+      try {
+        value = JSON.parse(closed ? token : `${token}"`);
+      } catch {
+        value = token.slice(1).replace(/\\n/g, "\n").replace(/\\r/g, "\r").replace(/\\t/g, "\t").replace(/\\"/g, '"').replace(/\\\\/g, "\\");
+      }
+      return {value, closed};
+    };
+    const addPreview = (value, path, partial) => {
+      const lines = value.split(/\r\n|\r|\n/).length;
+      if ((lines > 1 || value.length >= readableStringLength) && !path.toLowerCase().endsWith(".encrypted_content")) {
+        previews.push({path, text: value, lines, partial});
+      }
+    };
+    const parseValue = (path, allowPreview = true, depth = 0) => {
+      if (depth > 64) return;
+      skipWhitespace();
+      if (offset >= raw.length) return;
+      if (raw[offset] === '"') {
+        const parsed = parseString();
+        if (parsed && allowPreview) addPreview(parsed.value, path, !parsed.closed);
+        return;
+      }
+      if (raw[offset] === "{") {
+        offset++;
+        while (offset < raw.length) {
+          skipWhitespace();
+          if (raw[offset] === "}") { offset++; return; }
+          const key = parseString();
+          if (!key || !key.closed) return;
+          skipWhitespace();
+          if (raw[offset++] !== ":") return;
+          parseValue(jsonPath(path, key.value), allowPreview && key.value.toLowerCase() !== "encrypted_content", depth + 1);
+          skipWhitespace();
+          if (raw[offset] === ",") { offset++; continue; }
+          if (raw[offset] === "}") { offset++; return; }
+          return;
+        }
+        return;
+      }
+      if (raw[offset] === "[") {
+        offset++;
+        let index = 0;
+        while (offset < raw.length) {
+          skipWhitespace();
+          if (raw[offset] === "]") { offset++; return; }
+          parseValue(`${path}[${index++}]`, allowPreview, depth + 1);
+          skipWhitespace();
+          if (raw[offset] === ",") { offset++; continue; }
+          if (raw[offset] === "]") { offset++; return; }
+          return;
+        }
+        return;
+      }
+      while (offset < raw.length && !/[\s,}\]]/.test(raw[offset])) offset++;
+    };
+    parseValue(basePath);
   }
 
   function collectReadableJSONStrings(value, path, previews, depth = 0) {

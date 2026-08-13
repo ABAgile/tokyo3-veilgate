@@ -68,6 +68,22 @@ func TestMediateResponseVirtualizesOAuthTokensBeforeCapture(t *testing.T) {
 	}
 }
 
+func TestRequestCaptureRetainsEventStreamBody(t *testing.T) {
+	body := "data: {\"message\":\"first line\\nsecond line\"}\n\ndata: {\"message\":\"third line\\nfourth line\"}\n\n"
+	req := &http.Request{
+		Method: http.MethodPost, Host: "allowed.example",
+		Header: http.Header{"Content-Type": {"text/event-stream"}},
+		Body:   io.NopCloser(strings.NewReader(body)),
+	}
+	item := &flow.Flow{}
+	if err := (&Handler{Secrets: proxyTestBroker(t), CaptureLimit: 4096, MediationLimit: 4096}).mediateRequest(req, "agent", "allowed.example", true, item); err != nil {
+		t.Fatal(err)
+	}
+	if item.Capture.RequestBody == nil || item.Capture.RequestBody.Omitted || item.Capture.RequestBody.Text != body {
+		t.Fatalf("request capture = %#v", item.Capture.RequestBody)
+	}
+}
+
 func TestSubstituteBodyValidatesCapturedBodiesWithBrokerConfigured(t *testing.T) {
 	broker, err := oauth.New(oauth.File{Brokers: []oauth.Definition{{
 		Name: "example", Clients: []string{"agent"}, IssuerHost: "login.example.com",
@@ -122,6 +138,30 @@ func TestMediateResponseScrubsBeforeCaptureAndDelivery(t *testing.T) {
 	}
 	if item.Capture.ResponseBody == nil || item.Capture.ResponseBody.Text != `{"token":"[secret:api_key]"}` {
 		t.Fatalf("capture = %#v", item.Capture)
+	}
+}
+
+func TestResponseCaptureInfersEventStreamWithoutContentType(t *testing.T) {
+	body := "data: {\"message\":\"first line\\nsecond line\"}\n\ndata: [DONE]\n\n"
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
+	item := &flow.Flow{}
+	if err := (&Handler{CaptureLimit: 4096, MediationLimit: 4096}).mediateResponse(resp, "agent", "allowed.example", item); err != nil {
+		t.Fatal(err)
+	}
+	if item.Capture.ResponseBody == nil || item.Capture.ResponseBody.Omitted || item.Capture.ResponseBody.ContentType != "text/event-stream" || item.Capture.ResponseBody.Text != body {
+		t.Fatalf("response capture = %#v", item.Capture.ResponseBody)
+	}
+}
+
+func TestResponseCaptureInfersJSONWithoutContentType(t *testing.T) {
+	body := `{"message":"hello"}`
+	resp := &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}
+	item := &flow.Flow{}
+	if err := (&Handler{CaptureLimit: 4096, MediationLimit: 4096}).mediateResponse(resp, "agent", "allowed.example", item); err != nil {
+		t.Fatal(err)
+	}
+	if item.Capture.ResponseBody == nil || item.Capture.ResponseBody.Omitted || item.Capture.ResponseBody.ContentType != "application/json" || item.Capture.ResponseBody.Text != body {
+		t.Fatalf("response capture = %#v", item.Capture.ResponseBody)
 	}
 }
 
