@@ -48,6 +48,193 @@ secret, and proxy-credential values are redacted.
 Configured secret values and placeholders are replaced by `[secret:name]`
 markers before query strings, supported textual bodies, or frames are stored.
 
+## Installation
+
+### Published container image
+
+Tagged releases publish a multi-architecture image for `linux/amd64` and
+`linux/arm64` to GitHub Container Registry. The image contains the
+`veilgated` daemon and uses `veilgated serve` as its default command:
+
+```text
+ghcr.io/abagile/tokyo3-veilgate:<version>
+```
+
+Pin a release rather than using `latest` in a deployment. For example:
+
+```sh
+docker pull ghcr.io/abagile/tokyo3-veilgate:0.1.0
+docker run --rm ghcr.io/abagile/tokyo3-veilgate:0.1.0 version
+```
+
+### Image-based Compose setup
+
+The following is a minimal deployment that runs the published image; it does
+not require a Go installation or a checkout of this repository. Save it as
+`compose.yml` in a separate deployment directory. The proxy is available only
+to containers on the sandbox network, while the console is published to host
+loopback. The two listener
+addresses deliberately use network-specific aliases so sandbox containers
+cannot reach the management listener through the sandbox network. The
+checked-in `compose.yml` remains the source-build development rig described
+under [Run](#run).
+
+```yaml
+services:
+  veilgated:
+    image: "${VEILGATE_IMAGE:-ghcr.io/abagile/tokyo3-veilgate:0.1.0}"
+    command: ["serve"]
+    user: "${VEILGATE_UID:-65532}:${VEILGATE_GID:-65532}"
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      VEILGATED_ADDR: "veilgated-proxy:${VEILGATED_PROXY_PORT:-8080}"
+      VEILGATED_CONSOLE_ADDR: "veilgated-console:${VEILGATED_CONSOLE_PORT:-8081}"
+      VEILGATED_CONSOLE_USERNAME: "${VEILGATED_CONSOLE_USERNAME:?set VEILGATED_CONSOLE_USERNAME}"
+      VEILGATED_CONSOLE_PASSWORD: "${VEILGATED_CONSOLE_PASSWORD:?set VEILGATED_CONSOLE_PASSWORD}"
+      # An empty value is harmless when config/secrets.json is absent.
+      VEILGATED_DEV_API_KEY: "${VEILGATED_DEV_API_KEY:-}"
+    volumes:
+      - type: bind
+        source: ./config
+        target: /etc/veilgate
+        read_only: true
+      - type: bind
+        source: ./data
+        target: /var/lib/veilgate
+    ports:
+      - "127.0.0.1:${VEILGATED_CONSOLE_PORT:-8081}:${VEILGATED_CONSOLE_PORT:-8081}"
+    networks:
+      management:
+        aliases:
+          - veilgated-console
+      sandbox:
+        aliases:
+          - veilgated-proxy
+
+networks:
+  management:
+    name: "${VEILGATE_MANAGEMENT_NETWORK:-veilgate-management}"
+  sandbox:
+    name: "${VEILGATE_SANDBOX_NETWORK:-veilgate-sandbox}"
+```
+
+Prepare the deployment directory and client policy. The example policy is a
+starting point only: replace its development token, narrow its host and port
+allowlist, and keep the resulting file private.
+
+```sh
+mkdir -p config data
+chmod 700 config data
+
+VERSION=0.1.0
+RELEASE_TAG="v${VERSION}"
+IMAGE="ghcr.io/abagile/tokyo3-veilgate:${VERSION}"
+curl -fsSL \
+  "https://raw.githubusercontent.com/abagile/tokyo3-veilgate/${RELEASE_TAG}/config/clients.example.json" \
+  -o config/clients.json
+
+# Generate a token of at least 24 characters and put it in clients.json.
+openssl rand -base64 32
+```
+
+The static secret and OAuth policies are optional. Download and configure
+them only when they are needed:
+
+```sh
+RELEASE_TAG="${RELEASE_TAG:-v0.1.0}"
+# Static substitution (the example uses VEILGATED_DEV_API_KEY):
+curl -fsSL \
+  "https://raw.githubusercontent.com/abagile/tokyo3-veilgate/${RELEASE_TAG}/config/secrets.example.json" \
+  -o config/secrets.json
+# OAuth brokering:
+curl -fsSL \
+  "https://raw.githubusercontent.com/abagile/tokyo3-veilgate/${RELEASE_TAG}/config/oauth.example.json" \
+  -o config/oauth.json
+```
+
+For a local test deployment, generate the proxy interception material with the
+image itself and generate the console certificate with `mkcert`:
+
+```sh
+IMAGE="${IMAGE:-ghcr.io/abagile/tokyo3-veilgate:0.1.0}"
+docker pull "$IMAGE"
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD/config:/etc/veilgate" \
+  "$IMAGE" ca init \
+  --cert /etc/veilgate/intercept-ca.crt \
+  --key /etc/veilgate/intercept-ca.key
+docker run --rm --user "$(id -u):$(id -g)" \
+  -v "$PWD/config:/etc/veilgate" \
+  "$IMAGE" ca sign \
+  --ca-cert /etc/veilgate/intercept-ca.crt \
+  --ca-key /etc/veilgate/intercept-ca.key \
+  --cert /etc/veilgate/proxy.crt \
+  --key /etc/veilgate/proxy.key \
+  --san 'DNS:veilgated-proxy,DNS:localhost,IP:127.0.0.1,IP:::1'
+mkcert -install
+mkcert -cert-file config/console.crt -key-file config/console.key \
+  localhost 127.0.0.1 ::1 veilgated.localhost
+chmod 600 config/*key
+```
+
+For production, provision equivalent certificates and keys from the
+organization's certificate or secret-management system instead. The proxy
+certificate must contain the DNS names used by sandbox clients, and
+`intercept-ca.crt` must be installed in each sandbox trust store. Never expose
+`intercept-ca.key`, `proxy.key`, or `console.key` to a sandbox.
+
+Run the image as a non-root deployment user. The Compose example defaults to
+the image's `nonroot` UID (`65532`); when the files above are owned by the
+current user, set the UID/GID and console credentials in `.env`:
+
+```sh
+cat > .env <<EOF
+VEILGATE_IMAGE=ghcr.io/abagile/tokyo3-veilgate:0.1.0
+VEILGATE_UID=$(id -u)
+VEILGATE_GID=$(id -g)
+VEILGATED_CONSOLE_USERNAME=operator
+VEILGATED_CONSOLE_PASSWORD=$(openssl rand -hex 24)
+# Set this when config/secrets.json is present.
+# VEILGATED_DEV_API_KEY=replace-with-a-real-development-secret
+EOF
+chmod 600 .env
+
+docker compose pull
+docker compose up -d
+docker compose logs -f veilgated
+```
+
+If `config/secrets.json` is present, uncomment and set its value environment
+variable in `.env`; for the checked-in example this is
+`VEILGATED_DEV_API_KEY`. A non-empty `config/oauth.json` enables the OAuth
+broker and stores its plaintext recovery state in `data/auth.json`. Protect
+both the `data` directory and its backups.
+
+Containers attached to the sandbox network use
+`https://veilgated-proxy:8080` and must trust `config/intercept-ca.crt`. A
+sandbox in another Compose project can join the same network by declaring
+`veilgate-sandbox` as an external network, or with:
+
+```sh
+docker network connect "${VEILGATE_SANDBOX_NETWORK:-veilgate-sandbox}" <sandbox-container>
+```
+
+The console is available at `https://127.0.0.1:8081` in this example;
+`/healthz` is unauthenticated, while the other console routes require the
+configured Basic credentials. Keep the management network private and put any
+non-loopback console endpoint behind an authenticated operator gateway. Stop
+the deployment without deleting its state with:
+
+```sh
+docker compose down
+```
+
 ## Build
 
 Compile `veilgated` into `bin/veilgated`:
