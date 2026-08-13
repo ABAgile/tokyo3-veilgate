@@ -95,9 +95,9 @@ A client allows exact hosts or leftmost-label wildcards:
 `*.example.com` matches subdomains but not `example.com`. Direct IP targets are
 rejected. When `allowed_ports` is omitted it defaults to `[443]`.
 
-For a short-lived traffic-observation client, explicit host matching can be
-replaced with authenticated access to any valid hostname whose resolved address
-passes Veilgate's public-IP checks:
+For a short-lived broad-egress client, explicit host matching can be replaced
+with authenticated access to any valid hostname whose resolved address passes
+Veilgate's public-IP checks:
 
 ```json
 {
@@ -110,12 +110,15 @@ passes Veilgate's public-IP checks:
 }
 ```
 
-`observe_all_public_hosts` requires TLS interception CA material and does not
-permit direct IP targets, private/special-use addresses, or ports outside
-`allowed_ports`. If `allowed_hosts` is also present, it is redundant for this
-client's destination policy. This mode removes hostname allowlisting as an
-egress boundary and should be limited to isolated inspection sandboxes with
-short retention and credentials.
+`observe_all_public_hosts` does not permit direct IP targets,
+private/special-use addresses, or ports outside `allowed_ports`. With TLS
+interception enabled, it also permits HTTPS content inspection; without
+interception, HTTPS CONNECT sessions remain opaque TCP tunnels while
+authentication, public-DNS resolution, port checks, timeouts, byte accounting,
+and audit recording still apply. If `allowed_hosts` is also present, it is
+redundant for this client's destination policy. This mode removes hostname
+allowlisting as an egress boundary and should be limited to isolated
+sandboxes with short retention and credentials.
 
 ### Secret substitution
 

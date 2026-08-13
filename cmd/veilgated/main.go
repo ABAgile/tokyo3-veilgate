@@ -263,10 +263,6 @@ func runServe(ctx context.Context) error {
 	} else {
 		rt.Log.Warn("HTTPS interception disabled; CONNECT traffic remains opaque")
 	}
-	if policy.HasObservationClients() && interceptionAuthority == nil {
-		return errors.New("observe_all_public_hosts requires TLS interception CA material")
-	}
-
 	var secretBroker *secret.Broker
 	if secretsPath := optionalPolicyFile("VEILGATED_SECRETS_FILE", defaultSecretsFile, "secrets"); secretsPath != "" {
 		if interceptionAuthority == nil {

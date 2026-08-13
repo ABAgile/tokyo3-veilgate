@@ -135,6 +135,8 @@ func (f *File) Authenticate(token string) (*Client, bool) {
 }
 
 // HasObservationClients reports whether any identity permits all public hosts.
+// The mode is usable with or without TLS interception; callers may use this
+// to describe policy scope without implying application-data visibility.
 func (f *File) HasObservationClients() bool {
 	for _, client := range f.Clients {
 		if client.ObserveAllPublicHosts {
