@@ -319,9 +319,11 @@ bodies open prettified with the documented syntax-key/string/number/literal/
 markup highlighting and a Raw/Prettify toggle in both light and dark mode.
 Long or multiline JSON string values keep their lexical representation in the
 highlighted code and additionally expose collapsed, text-only readable previews
-with their JSON path and line count. Readable previews skip values under the
-case-insensitive `encrypted_content` field name because ciphertext is not useful
-as human-readable text; the Raw/Prettify JSON view remains unchanged. Binary
+with their JSON path and line count. The same extraction applies to structured
+JSON in JSONL/NDJSON records and Server-Sent Events `data:` fields, including
+JSON string values containing escaped newlines. Readable previews skip values
+under the case-insensitive `encrypted_content` field name because ciphertext is
+not useful as human-readable text; the Raw/Prettify JSON view remains unchanged. Binary
 records show direction, decoded
 byte size, and SHA-256; binary bytes and Base64 are never retained. Captures use `[secret:name]` markers and
 must never show proxy credentials, credential-bearing header values,
@@ -403,9 +405,10 @@ a cyan leading rule.
   Text is inserted as text content, never interpreted as markup. Multiline JSON
   string previews decode display-only escape sequences without changing the
   retained or Raw representation; incomplete or truncated string tokens do not
-  produce a preview. WebSocket messages identify client-to-upstream or
-  upstream-to-client direction and retain chronological order; binary messages
-  show metadata only. The WebSocket navigator filters and searches the retained
+  produce a preview. The same extraction covers structured JSON in
+  JSONL/NDJSON records and Server-Sent Events `data:` fields. WebSocket messages
+  identify client-to-upstream or upstream-to-client direction and retain
+  chronological order; binary messages show metadata only. The WebSocket navigator filters and searches the retained
   sanitized text, labels JSON event types, summarizes only contiguous compatible
   delta events, and keeps each source message expandable for exact examination.
   Built-in display formatter plugins recognize
@@ -443,7 +446,8 @@ relying on column position alone.
 - **Do** let operators switch formatted HTML/JSON/JSONL/SSE/Form URL-Encoded captures back to their
   exact retained raw representation.
 - **Do** provide readable previews for long or multiline JSON strings without
-  replacing the lexical JSON code view, except for `encrypted_content` fields
+  replacing the lexical JSON code view, including JSON in JSONL/NDJSON records
+  and Server-Sent Events `data:` fields, except for `encrypted_content` fields
   that are not useful as human-readable text.
 - **Do** let operators search, filter, summarize, and expand high-volume
   WebSocket streams without losing chronological raw messages.

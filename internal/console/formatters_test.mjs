@@ -56,6 +56,26 @@ test("bounds readable previews while traversing large arrays", () => {
   assert.equal(formatted.previews[23].path, "$[23]");
 });
 
+test("extracts readable previews from JSON in SSE data fields", () => {
+  const formatted = formatters.format("text/event-stream", [
+    "event: message",
+    `data: ${JSON.stringify({message: "first line\nsecond line", nested: {prompt: "p".repeat(160)}})}`,
+    "",
+    `data: ${JSON.stringify({message: "third line\nfourth line"})}`,
+    "",
+  ].join("\n"));
+
+  assert.equal(formatted.language, "sse");
+  assert.deepEqual(
+    Array.from(formatted.previews, preview => [preview.path, preview.text, preview.lines]),
+    [
+      ["event 1.message", "first line\nsecond line", 2],
+      ["event 1.nested.prompt", "p".repeat(160), 1],
+      ["event 2.message", "third line\nfourth line", 2],
+    ],
+  );
+});
+
 test("skips encrypted content from readable previews without changing JSON", () => {
   const raw = JSON.stringify({
     encrypted_content: "ciphertext".repeat(40),

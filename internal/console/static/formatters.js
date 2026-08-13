@@ -15,7 +15,8 @@
       label: "Formatted SSE",
       language: "sse",
       matches: (mediaType, raw) => mediaType === "text/event-stream" || looksLikeSSE(raw),
-      format: prettySSE
+      format: prettySSE,
+      readableJSON: readableSSEJSONStrings
     },
     {
       label: "Formatted JSONL",
@@ -46,6 +47,7 @@
       try {
         const result = {label: plugin.label, language: plugin.language, text: plugin.format(raw)};
         if (plugin.language === "json") result.previews = readableJSONStrings(raw, plugin.jsonLines);
+        else if (plugin.readableJSON) result.previews = plugin.readableJSON(raw);
         return result;
       } catch {
         return null;
@@ -58,6 +60,32 @@
     const sources = jsonLines
       ? raw.split(/\r?\n/).map((line, index) => line.trim() ? {text: line, path: `line ${index + 1}`} : null).filter(Boolean)
       : [{text: raw, path: "$"}];
+    return readableJSONSources(sources);
+  }
+
+  function readableSSEJSONStrings(raw) {
+    const sources = [];
+    let dataLines = [];
+    let eventNumber = 0;
+    const flush = () => {
+      if (!dataLines.length) return;
+      eventNumber++;
+      sources.push({text: dataLines.join("\n"), path: `event ${eventNumber}`});
+      dataLines = [];
+    };
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line) {
+        flush();
+        continue;
+      }
+      const match = line.match(/^data\s*:\s?(.*)$/i);
+      if (match) dataLines.push(match[1]);
+    }
+    flush();
+    return readableJSONSources(sources);
+  }
+
+  function readableJSONSources(sources) {
     const previews = [];
     for (const source of sources) {
       let value;
