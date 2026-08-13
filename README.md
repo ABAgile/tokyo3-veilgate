@@ -506,7 +506,7 @@ marked omitted in capture.
 | `VEILGATED_DIAL_TIMEOUT` | no | `10s` | Upstream connection timeout |
 | `VEILGATED_SESSION_IDLE_TIMEOUT` | no | `5m` | Close proxy sessions after inactivity; 1s–24h |
 | `VEILGATED_SESSION_MAX_DURATION` | no | `30m` | Maximum proxy request/session lifetime; at most 168h |
-| `VEILGATED_UPSTREAM_RESPONSE_HEADER_TIMEOUT` | no | `30s` | Maximum wait for upstream response headers; 1s–10m |
+| `VEILGATED_UPSTREAM_RESPONSE_HEADER_TIMEOUT` | no | `60s` | Maximum wait for upstream response headers; 1s–10m |
 | `VEILGATED_CAPTURE_LIMIT_BYTES` | no | `262144` | Maximum retained bytes per capture section; 1024–4194304 |
 | `VEILGATED_MEDIATION_LIMIT_BYTES` | no | `4194304` | Maximum decoded body or WebSocket message; also sizes the intercepted HTTP/2 stream cap; at least capture limit, at most 67108864 |
 | `VEILGATED_INTERCEPT_CA_CERT` | no | `/etc/veilgate/intercept-ca.crt` when present | Interception CA certificate PEM |

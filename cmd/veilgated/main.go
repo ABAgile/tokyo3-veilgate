@@ -44,7 +44,7 @@
 //	VEILGATED_SESSION_MAX_DURATION Maximum lifetime of one proxy request/session
 //	                            (default "30m").
 //	VEILGATED_UPSTREAM_RESPONSE_HEADER_TIMEOUT Maximum wait for upstream response
-//	                            headers (default "30s").
+//	                            headers (default "60s").
 //	VEILGATED_CAPTURE_LIMIT_BYTES Maximum retained content per capture section
 //	                            (default 262144; maximum 4194304).
 //	VEILGATED_MEDIATION_LIMIT_BYTES Maximum decoded request, response, or WebSocket
@@ -190,7 +190,7 @@ func runServe(ctx context.Context) error {
 		return err
 	}
 	if responseHeaderTimeout == 0 {
-		responseHeaderTimeout = 30 * time.Second
+		responseHeaderTimeout = 60 * time.Second
 	}
 	if responseHeaderTimeout < time.Second || responseHeaderTimeout > 10*time.Minute {
 		return errors.New("VEILGATED_UPSTREAM_RESPONSE_HEADER_TIMEOUT must be between 1s and 10m")

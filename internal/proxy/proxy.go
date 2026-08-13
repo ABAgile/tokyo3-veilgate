@@ -48,7 +48,7 @@ const (
 	recordShutdownTimeout        = 5 * time.Second
 	defaultSessionIdleTimeout    = 5 * time.Minute
 	defaultSessionMaxDuration    = 30 * time.Minute
-	defaultResponseHeaderTimeout = 30 * time.Second
+	defaultResponseHeaderTimeout = 60 * time.Second
 )
 
 // Interceptor supplies destination-bound TLS server configurations.
