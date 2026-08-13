@@ -1,4 +1,10 @@
-# Veilgate
+# tokyo3-Veilgate
+
+[![Release](https://img.shields.io/github/v/release/abagile/tokyo3-veilgate?sort=semver&logo=Go&color=%23007D9C)](https://github.com/abagile/tokyo3-veilgate/releases)
+[![Test](https://github.com/abagile/tokyo3-veilgate/actions/workflows/test.yml/badge.svg)](https://github.com/abagile/tokyo3-veilgate/actions/workflows/test.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/abagile/tokyo3-veilgate.svg)](https://pkg.go.dev/github.com/abagile/tokyo3-veilgate)
+[![Go Report Card](https://goreportcard.com/badge/github.com/abagile/tokyo3-veilgate)](https://goreportcard.com/report/github.com/abagile/tokyo3-veilgate)
+[![codecov](https://codecov.io/gh/abagile/tokyo3-veilgate/branch/main/graph/badge.svg)](https://codecov.io/gh/abagile/tokyo3-veilgate)
 
 Veilgate is a secret-aware egress gateway for agent sandboxes. The daemon
 binary is `veilgated`.
@@ -44,17 +50,20 @@ markers before query strings, supported textual bodies, or frames are stored.
 
 ## Build
 
-Compile the static Linux binary into `bin/veilgated`:
+Compile `veilgated` into `bin/veilgated`:
 
 ```sh
 make build
 ```
 
-Package that binary as `tokyo3-veilgate:dev`:
+Build the server image locally:
 
 ```sh
 make docker-build
 ```
+
+The default image is `abagile/tokyo3-veilgate:dev-<commit>`. Override
+`IMAGE_NAME`, `IMAGE_TAG`, and `TARGETARCH` as needed.
 
 ## Configure
 
@@ -194,7 +203,7 @@ token, and unknown placeholder-shaped text is never treated as a credential.
 The real token mapping is persisted as **unencrypted plaintext** in
 `VEILGATED_AUTH_FILE`, defaulting to `/var/lib/veilgate/auth.json`. The
 Compose deployment stores this file beside `flows.db` in the single
-`db_data`/`/var/lib/veilgate` volume. The file is written mode `0600` using
+`data`/`/var/lib/veilgate` volume. The file is written mode `0600` using
 atomic replacement and is never mounted into a sandbox. Protect the volume and
 backups; encryption at rest is not implemented yet.
 
@@ -230,7 +239,7 @@ root CA. Generate development material without overwriting existing files:
 
 ```sh
 mkcert -install
-make gen-cert
+make gen-certs
 ```
 
 `mkcert -install` creates the local root CA when needed and installs its trust
@@ -239,7 +248,7 @@ reported by `mkcert -CAROOT` and refuses to generate the console certificate
 if `rootCA.pem` is absent.
 
 ```sh
-make gen-cert
+make gen-certs
 ```
 
 For manual bootstrap, the Make target runs the equivalent commands:
@@ -278,11 +287,11 @@ The console certificate is a separately keyed `mkcert` leaf signed by the
 local development `rootCA.pem`. HTTPS interception is enabled when both
 interception CA paths are configured.
 
-The Compose rig mounts the generated CA, proxy, and console files from the
-external `tokyo3_hq_proj` volume using paths relative to `abagile/veilgate/`;
-no host bind path is required.
-Generated certificate and key material is gitignored. This shared-project
-arrangement is for the containerized development rig only. Production deployments should keep the
+The Compose development rig mounts the generated CA, proxy, and console files
+from the external `tokyo3_hq_proj` volume using paths relative to
+`abagile/veilgate/`; no host bind path is required. Generated certificate and
+key material is gitignored. This shared-project arrangement is for the
+containerized development rig only. Production deployments should keep the
 private key outside sandbox-visible storage and provision a dedicated
 interception CA through their secret-management process.
 
@@ -314,24 +323,27 @@ on the shared project volume, treat it as disposable and never reuse it outside
 this test rig. CA material is loaded at daemon startup, so CA rotation currently
 requires restarting `veilgated`.
 
-For a local Compose test deployment, run:
+For a local Compose test deployment, provide console credentials and run:
 
 ```sh
-make docker-up
+VEILGATED_CONSOLE_USERNAME=operator \
+VEILGATED_CONSOLE_PASSWORD='replace-with-a-secret' \
+  make docker-up
 ```
 
 This command performs the complete test-run sequence:
 
-1. builds `bin/veilgated` for Linux;
+1. builds a local `bin/veilgated` helper for certificate generation;
 2. creates or reuses the project-local development interception CA;
-3. packages the binary as `tokyo3-veilgate:dev`;
+3. builds the server image for the configured target platform as
+   `abagile/tokyo3-veilgate:dev-<commit>`;
 4. creates the external `tokyo3_hq_sandbox` network when absent;
 5. requires the existing `tokyo3_hq_default` management network; and
 6. starts `compose.yml` and waits for the service to run.
 
 The Compose rig mounts `config/clients.example.json`,
 `config/secrets.example.json`, and `config/oauth.example.json`, persists flows
-and OAuth state in the single `db_data` volume, and uses this development proxy
+and OAuth state in the single `data` volume, and uses this development proxy
 identity:
 
 ```text
@@ -343,12 +355,12 @@ The console listens on the `tokyo3_hq_default` management network at
 `https://veilgated.localhost:8081` and is published to host loopback at
 `https://127.0.0.1:8081` by default. Browsers must trust the mkcert root CA
 reported by `mkcert -CAROOT`. It is not reachable by containers on
-`tokyo3_hq_sandbox`. The current development credentials default to `admin` /
-`admin`; override `VEILGATED_CONSOLE_USERNAME` and
-`VEILGATED_CONSOLE_PASSWORD` before using the stack beyond an isolated
-development network. Veilgated requires both credentials when
-`VEILGATED_CONSOLE_ADDR` is not a loopback address. A loopback console may omit
-both credentials, but the daemon logs an explicit unauthenticated warning.
+`tokyo3_hq_sandbox`. The current development credentials are supplied through
+`VEILGATED_CONSOLE_USERNAME` and `VEILGATED_CONSOLE_PASSWORD`; do not use
+the development defaults beyond an isolated network. Veilgated requires both
+credentials when `VEILGATED_CONSOLE_ADDR` is not a loopback address. A loopback
+console may omit both credentials, but the daemon logs an explicit
+unauthenticated warning.
 Sandbox containers on `tokyo3_hq_sandbox` can reach the
 proxy at `https://veilgated-proxy:8080` by default; set
 `VEILGATED_PROXY_PORT` to change the sandbox-facing listener port. The proxy
@@ -370,10 +382,13 @@ packaging. The Makefile defaults `INTERCEPT_CA_CERT` and `INTERCEPT_CA_KEY` to
 and `CONSOLE_KEY` to `config/console.crt` and `config/console.key`; Compose
 uses their filenames in the mounted `/etc/veilgate` config directory. The
 Compose development service runs as UID/GID 1000 so it can read the mode-0600
-keys created by the development container user through `tokyo3_hq_proj`.
+keys created by the development container user through `tokyo3_hq_proj`. The
+`data` volume must be initialized manually with matching ownership; Compose
+intentionally has no privileged init container.
 
-Set both console credential variables or neither. Keep the management network
-private and place the console behind an authenticated operator gateway.
+Set both console credential variables before starting Compose. Keep the
+management network private and place the console behind an authenticated
+operator gateway.
 
 Test development secret substitution from a container attached to
 `tokyo3_hq_sandbox` by placing the configured placeholder in a request header.
@@ -514,7 +529,9 @@ packaging. The Makefile defaults `INTERCEPT_CA_CERT` and `INTERCEPT_CA_KEY` to
 and `CONSOLE_KEY` to `config/console.crt` and `config/console.key`; Compose
 uses their filenames in the mounted `/etc/veilgate` config directory. The
 Compose development service runs as UID/GID 1000 so it can read the mode-0600
-keys created by the development container user through `tokyo3_hq_proj`.
+keys created by the development container user through `tokyo3_hq_proj`. The
+`data` volume must be initialized manually with matching ownership; Compose
+intentionally has no privileged init container.
 
 Set both console credential variables when the console address is not
 loopback; a lone variable is invalid. On a loopback address, both may be

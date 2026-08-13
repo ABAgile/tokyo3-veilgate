@@ -1,0 +1,41 @@
+name: Test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/cache@v5
+        with:
+          path: ~/go/bin
+          key: go-tools-${{ hashFiles('go.mod') }}
+
+      - run: |
+          which staticcheck || go install honnef.co/go/tools/cmd/staticcheck@latest
+          which gopls       || go install golang.org/x/tools/gopls@latest
+          which govulncheck || go install golang.org/x/vuln/cmd/govulncheck@latest
+          which deadcode    || go install golang.org/x/tools/cmd/deadcode@latest
+
+      - run: node --check internal/console/static/app.js
+      - run: node --check internal/console/static/formatters.js
+      - run: node --test internal/console/formatters_test.mjs
+      - run: go vet ./...
+      - run: staticcheck ./...
+      - run: find . -type f -name "*.go" -print0 | xargs -0 -n 100 gopls check -severity=hint
+      - run: go test ./... -count=1
+      - run: govulncheck ./...
+      - name: deadcode
+        run: |
+          out=$(deadcode -test ./...)
+          if [ -n "$out" ]; then echo "$out"; echo "deadcode: unreachable functions found (above)"; exit 1; fi

@@ -1,41 +1,137 @@
-GO ?= go
-BIN_DIR ?= bin
-VEILGATED_BIN := $(BIN_DIR)/veilgated
-IMAGE_NAME ?= tokyo3-veilgate
-IMAGE_TAG ?= dev
-IMAGE := $(IMAGE_NAME):$(IMAGE_TAG)
-TARGETARCH ?= $(shell $(GO) env GOARCH)
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-VEILGATED_CONSOLE_PORT ?= 8081
-VEILGATED_PROXY_PORT ?= 8080
+## veilgate — build targets
+##
+## Usage: make <target>
+##
+
+# ── Variables ─────────────────────────────────────────────────────────────────
+
+MODULE          := github.com/abagile/veilgate
+CMD_VEILGATED   := ./cmd/veilgated
+
+BIN_DIR         := bin
+VEILGATED_BIN   := $(BIN_DIR)/veilgated
+
+GIT_TAG    := $(shell git describe --tags --exact-match 2>/dev/null || true)
+GIT_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+VERSION    := $(if $(GIT_TAG),$(GIT_TAG),dev-$(GIT_COMMIT))
+
+LDFLAGS := -s -w -X main.Version=$(VERSION)
+
+GO      := go
+GOFLAGS :=
+
+TARGETARCH ?= arm64
+
+IMAGE_NAME     ?= abagile/tokyo3-veilgate
+IMAGE_TAG      ?= $(VERSION)
+IMAGE          := $(IMAGE_NAME):$(IMAGE_TAG)
+
+COMPOSE_PROJECT_NAME        ?= tokyo3_veilgate
+VEILGATE_CONFIG_VOLUME      ?= tokyo3_hq_proj
+VEILGATE_CONFIG_SUBPATH     ?= abagile/veilgate/config
+VEILGATE_SANDBOX_NETWORK    ?= tokyo3_hq_sandbox
+VEILGATE_MANAGEMENT_NETWORK ?= tokyo3_hq_default
+DATA_VOLUME                 := $(COMPOSE_PROJECT_NAME)_data
+# The development rig uses project files owned by the local development user.
+# Registry installations should override these to match the prepared volume.
+VEILGATE_UID               ?= 1000
+VEILGATE_GID               ?= 1000
+
+VEILGATED_CONSOLE_PORT     ?= 8081
+VEILGATED_PROXY_PORT       ?= 8080
+VEILGATED_CONSOLE_USERNAME ?= admin
+VEILGATED_CONSOLE_PASSWORD ?= admin
+
 INTERCEPT_CA_CERT ?= config/intercept-ca.crt
-INTERCEPT_CA_KEY ?= config/intercept-ca.key
-PROXY_CERT ?= config/proxy.crt
-PROXY_KEY ?= config/proxy.key
-CONSOLE_CERT ?= config/console.crt
-CONSOLE_KEY ?= config/console.key
-MKCERT ?= mkcert
-PROXY_CERT_SAN ?= DNS:veilgated-proxy,DNS:veilgated,DNS:localhost,IP:127.0.0.1,IP:::1
+INTERCEPT_CA_KEY  ?= config/intercept-ca.key
+PROXY_CERT        ?= config/proxy.crt
+PROXY_KEY         ?= config/proxy.key
+CONSOLE_CERT      ?= config/console.crt
+CONSOLE_KEY       ?= config/console.key
+MKCERT            ?= mkcert
+PROXY_CERT_SAN    ?= DNS:veilgated-proxy,DNS:veilgated,DNS:localhost,IP:127.0.0.1,IP:::1
 CONSOLE_CERT_HOSTS ?= localhost 127.0.0.1 ::1 veilgated.localhost veilgated
-VEILGATED_INTERCEPT_CA_CERT ?= /etc/veilgate/$(notdir $(INTERCEPT_CA_CERT))
-VEILGATED_INTERCEPT_CA_KEY ?= /etc/veilgate/$(notdir $(INTERCEPT_CA_KEY))
-VEILGATED_PROXY_CERT ?= /etc/veilgate/$(notdir $(PROXY_CERT))
-VEILGATED_PROXY_KEY ?= /etc/veilgate/$(notdir $(PROXY_KEY))
-VEILGATED_CONSOLE_CERT ?= /etc/veilgate/$(notdir $(CONSOLE_CERT))
-VEILGATED_CONSOLE_KEY ?= /etc/veilgate/$(notdir $(CONSOLE_KEY))
+
+export COMPOSE_PROJECT_NAME
+export VEILGATE_CONFIG_VOLUME VEILGATE_CONFIG_SUBPATH
+export VEILGATE_SANDBOX_NETWORK VEILGATE_MANAGEMENT_NETWORK
+export VEILGATE_UID VEILGATE_GID
 export VEILGATED_CONSOLE_PORT VEILGATED_PROXY_PORT
-export VEILGATED_INTERCEPT_CA_CERT VEILGATED_INTERCEPT_CA_KEY
-export VEILGATED_PROXY_CERT VEILGATED_PROXY_KEY
-export VEILGATED_CONSOLE_CERT VEILGATED_CONSOLE_KEY
+export VEILGATED_CONSOLE_USERNAME VEILGATED_CONSOLE_PASSWORD
 
-.PHONY: build gen-ca gen-console-cert gen-cert check docker-build docker-up docker-down clean
+# ── Phony targets ─────────────────────────────────────────────────────────────
 
-## build: Compile the static Linux veilgated binary into ./bin/.
-build:
-	@mkdir -p $(BIN_DIR)
-	CGO_ENABLED=0 GOOS=linux GOARCH=$(TARGETARCH) $(GO) build \
-	  -trimpath -ldflags="-s -w -X main.Version=$(VERSION)" \
-	  -o $(VEILGATED_BIN) ./cmd/veilgated
+.PHONY: all build build-linux build-linux-amd64 build-darwin \
+        test test-verbose tidy vet lint check \
+        gen-ca gen-console-cert gen-certs \
+        docker-build docker-build-amd64 docker-push \
+        docker-up docker-down \
+        install clean clean-all help
+
+all: build
+
+# ── Build ─────────────────────────────────────────────────────────────────────
+
+## build: Compile veilgated into ./bin/.
+build: $(BIN_DIR)
+	$(GO) build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o $(VEILGATED_BIN) $(CMD_VEILGATED)
+	@echo "  built $(VEILGATED_BIN) ($(VERSION))"
+
+$(BIN_DIR):
+	mkdir -p $(BIN_DIR)
+
+## build-linux: Cross-compile veilgated for Linux arm64 (Graviton, default).
+build-linux: $(BIN_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/veilgated-linux-arm64 $(CMD_VEILGATED)
+	@echo "  built veilgated-linux-arm64"
+
+## build-linux-amd64: Cross-compile veilgated for Linux amd64.
+build-linux-amd64: $(BIN_DIR)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/veilgated-linux-amd64 $(CMD_VEILGATED)
+	@echo "  built veilgated-linux-amd64"
+
+## build-darwin: Cross-compile veilgated for macOS arm64.
+build-darwin: $(BIN_DIR)
+	GOOS=darwin GOARCH=arm64 $(GO) build -ldflags "$(LDFLAGS)" -o $(BIN_DIR)/veilgated-darwin-arm64 $(CMD_VEILGATED)
+	@echo "  built veilgated-darwin-arm64"
+
+# ── Quality ───────────────────────────────────────────────────────────────────
+
+## test: Run all tests.
+test:
+	$(GO) test ./... -count=1
+
+## test-verbose: Run all tests with verbose output.
+test-verbose:
+	$(GO) test ./... -count=1 -v
+
+## tidy: Run go mod tidy.
+tidy:
+	$(GO) mod tidy
+
+## vet: Run go vet.
+vet:
+	$(GO) vet ./...
+
+## lint: Run staticcheck.
+lint:
+	staticcheck ./...
+
+## check: Full pre-commit sequence (gofmt + tidy + frontend tests + Go quality checks).
+check:
+	gofmt -s -w .
+	$(GO) mod tidy
+	node --check internal/console/static/app.js
+	node --check internal/console/static/formatters.js
+	node --test internal/console/formatters_test.mjs
+	$(GO) test ./... -count=1
+	$(GO) vet ./...
+	staticcheck ./...
+	find . -type f -name "*.go" -print0 | xargs -0 -n 100 gopls check -severity=hint
+	govulncheck ./...
+	@out=$$(deadcode -test ./...); if [ -n "$$out" ]; then echo "$$out"; echo "deadcode: unreachable functions found (above)"; exit 1; fi
+
+# ── Development certificates ─────────────────────────────────────────────────
 
 ## gen-ca: Generate the local development TLS interception CA once.
 gen-ca: build
@@ -68,8 +164,8 @@ gen-console-cert:
 		echo "  wrote $(CONSOLE_CERT) and $(CONSOLE_KEY) signed by $$root_ca"; \
 	fi
 
-## gen-cert: Generate interception CA, proxy, and console certificates once.
-gen-cert: gen-ca gen-console-cert
+## gen-certs: Generate interception CA, proxy, and console certificates once.
+gen-certs: gen-ca gen-console-cert
 	@set -eu; \
 	umask 077; \
 	mkdir -p "$(dir $(PROXY_CERT))" "$(dir $(PROXY_KEY))"; \
@@ -88,55 +184,77 @@ gen-cert: gen-ca gen-console-cert
 		echo "  wrote $(PROXY_CERT) and $(PROXY_KEY) signed by $(INTERCEPT_CA_CERT)"; \
 	fi
 
-# ── Quality ───────────────────────────────────────────────────────────────────
-
-## check: Full pre-commit sequence (gofmt + tidy + test + vet + staticcheck + gopls + govulncheck + deadcode)
-check:
-	gofmt -s -w .
-	$(GO) mod tidy
-	node --check internal/console/static/app.js
-	node --check internal/console/static/formatters.js
-	node --test internal/console/formatters_test.mjs
-	$(GO) test ./... -count=1
-	$(GO) vet ./...
-	staticcheck ./...
-	find . -type f -name "*.go" -print0 | xargs -0 -n 100 gopls check -severity=hint
-	govulncheck ./...
-	@out=$$(deadcode -test ./...); if [ -n "$$out" ]; then echo "$$out"; echo "deadcode: unreachable functions found (above)"; exit 1; fi
-
-
 # ── Docker ────────────────────────────────────────────────────────────────────
 
-## docker-build: Build the binary, then package it as the local Docker image.
-docker-build: build
+## docker-build: Build the Veilgate Docker image (linux/arm64, default).
+docker-build:
 	docker build \
 	  --platform linux/$(TARGETARCH) \
+	  --build-arg TARGETOS=linux \
+	  --build-arg TARGETARCH=$(TARGETARCH) \
 	  --build-arg VERSION=$(VERSION) \
-	  -t $(IMAGE) .
+	  --target server \
+	  -t $(IMAGE_NAME):$(IMAGE_TAG) \
+	  -t $(IMAGE_NAME):latest \
+	  .
+	@echo "  built $(IMAGE_NAME):$(IMAGE_TAG)"
 
-## docker-up: Build, package, and start Veilgate on tokyo3_hq_sandbox.
-docker-up: gen-cert docker-build
-	@docker network inspect tokyo3_hq_sandbox >/dev/null 2>&1 || \
-	  docker network create tokyo3_hq_sandbox >/dev/null
-	@docker network inspect tokyo3_hq_default >/dev/null 2>&1 || \
-	  { echo "tokyo3_hq_default management network is required" >&2; exit 1; }
-	VEILGATE_IMAGE=$(IMAGE) docker compose -f compose.yml up -d --no-build --wait --remove-orphans
-	@echo "  proxy:   https://veilgated-proxy:$(VEILGATED_PROXY_PORT) on tokyo3_hq_sandbox"
+## docker-build-amd64: Build the Veilgate Docker image for linux/amd64.
+docker-build-amd64:
+	docker build \
+	  --platform linux/amd64 \
+	  --build-arg TARGETOS=linux \
+	  --build-arg TARGETARCH=amd64 \
+	  --build-arg VERSION=$(VERSION) \
+	  --target server \
+	  -t $(IMAGE_NAME):$(IMAGE_TAG)-amd64 \
+	  .
+
+## docker-push: Push the image to the configured registry.
+docker-push: docker-build
+	docker push $(IMAGE_NAME):$(IMAGE_TAG)
+	docker push $(IMAGE_NAME):latest
+
+# ── Dev rig (docker compose) ──────────────────────────────────────────────────
+
+## docker-up: Generate dev certificates and bring up the Compose rig.
+docker-up: gen-certs
+	@docker network create $(VEILGATE_SANDBOX_NETWORK) >/dev/null 2>&1 || true
+	@docker network inspect $(VEILGATE_MANAGEMENT_NETWORK) >/dev/null 2>&1 || \
+	  { echo "$(VEILGATE_MANAGEMENT_NETWORK) management network is required" >&2; exit 1; }
+	@docker volume inspect $(VEILGATE_CONFIG_VOLUME) >/dev/null 2>&1 || \
+	  { echo "$(VEILGATE_CONFIG_VOLUME) config volume is required; provision it before docker-up" >&2; exit 1; }
+	@docker volume inspect $(DATA_VOLUME) >/dev/null 2>&1 || \
+	  { echo "$(DATA_VOLUME) data volume is required; create and chown it to $(VEILGATE_UID):$(VEILGATE_GID) before docker-up" >&2; exit 1; }
+	docker compose -f compose.yml up -d --build --wait --remove-orphans
+	@echo "  proxy:   https://veilgated-proxy:$(VEILGATED_PROXY_PORT) on $(VEILGATE_SANDBOX_NETWORK)"
 	@echo "  console: https://127.0.0.1:$(VEILGATED_CONSOLE_PORT)"
 	@echo "  proxy trust:   $(INTERCEPT_CA_CERT)"
 	@echo "  console trust: $$(mkcert -CAROOT)/rootCA.pem"
 
-## docker-down: Stop the Compose test deployment.
+## docker-down: Stop the Compose test deployment (preserves volumes).
 docker-down:
-	VEILGATE_IMAGE=$(IMAGE) docker compose -f compose.yml down --remove-orphans
+	docker compose -f compose.yml down --remove-orphans
 
-## clean: Remove locally built binaries.
+# ── Install / Clean ───────────────────────────────────────────────────────────
+
+## install: Install veilgated to GOPATH/bin (or ~/go/bin).
+install:
+	$(GO) install -ldflags "$(LDFLAGS)" $(CMD_VEILGATED)
+	@echo "  installed veilgated"
+
+## clean: Remove ./bin/.
 clean:
 	rm -rf $(BIN_DIR)
 
-# ── Help ──────────────────────────────────────────────────────────────────────
+## clean-all: Stop Compose and remove local data volumes and build artifacts.
+clean-all: clean
+	docker compose -f compose.yml down --remove-orphans -v 2>/dev/null || true
+	@echo "  removed local Compose data volume and build artifacts"
 
-## help: Show this help
+# ── Help ─────────────────────────────────────────────────────────────────────
+
+## help: Show this help.
 help:
 	@awk '/^##/ { \
 	  line=$$0; sub(/^## ?/, "", line); \

@@ -1,8 +1,12 @@
-name: tokyo3_veilgate
+name: ${COMPOSE_PROJECT_NAME:-tokyo3_veilgate}
 
 services:
   veilgated:
-    image: ${VEILGATE_IMAGE:-tokyo3-veilgate:dev}
+    build:
+      context: .
+      target: server
+      args:
+        VERSION: ${VERSION:-dev-docker}
     command: ["serve"]
     user: ${VEILGATE_UID:-1000}:${VEILGATE_GID:-1000}
     restart: unless-stopped
@@ -53,7 +57,7 @@ services:
         target: /etc/veilgate
         read_only: true
         volume:
-          subpath: abagile/veilgate/config
+          subpath: ${VEILGATE_CONFIG_SUBPATH:-abagile/veilgate/config}
     ports:
       - 127.0.0.1:${VEILGATED_CONSOLE_PORT:-8081}:${VEILGATED_CONSOLE_PORT:-8081}
     networks:
@@ -71,13 +75,13 @@ services:
 networks:
   sandbox:
     external: true
-    name: tokyo3_hq_sandbox
+    name: ${VEILGATE_SANDBOX_NETWORK:-tokyo3_hq_sandbox}
   management:
     external: true
-    name: tokyo3_hq_default
+    name: ${VEILGATE_MANAGEMENT_NETWORK:-tokyo3_hq_default}
 
 volumes:
   config:
     external: true
-    name: tokyo3_hq_proj
+    name: ${VEILGATE_CONFIG_VOLUME:-tokyo3_hq_proj}
   data:
