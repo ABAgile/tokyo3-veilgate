@@ -17,6 +17,7 @@ services:
     cap_drop:
       - ALL
     environment:
+      TZ: Asia/Taipei
       # These paths are the daemon defaults; set them only when using
       # non-standard mount locations.
       # VEILGATED_CLIENTS_FILE: /etc/veilgate/clients.json
