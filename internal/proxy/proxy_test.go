@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -52,6 +53,15 @@ func testPolicy(t *testing.T) *config.File {
 		t.Fatal(err)
 	}
 	return f
+}
+
+type countingInterceptor struct {
+	calls atomic.Int32
+}
+
+func (i *countingInterceptor) TLSConfig(string) (*tls.Config, error) {
+	i.calls.Add(1)
+	return nil, errors.New("unexpected TLS interception")
 }
 
 func storedFlows(t *testing.T, store *flow.Store, expected int) []flow.Flow {
@@ -407,6 +417,86 @@ func TestConnectTunnelCompletesWhenClientCloses(t *testing.T) {
 	}
 	items := storedFlows(t, store, 1)
 	if len(items) != 1 || items[0].BytesSent != 5 {
+		t.Fatalf("flows = %#v", items)
+	}
+}
+
+func TestConnectUsesOpaqueHostPolicyBeforeInterception(t *testing.T) {
+	policy := &config.File{Clients: []config.Client{{
+		Name:         "agent",
+		Token:        "012345678901234567890123",
+		AllowedHosts: []string{"allowed.example"},
+		OpaqueHosts:  []string{"allowed.example"},
+		AllowedPorts: []int{443},
+	}}}
+	if err := policy.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	store := flow.NewStore(10)
+	interceptor := &countingInterceptor{}
+	h := &Handler{
+		Policy: policy, Resolver: fixedResolver{netip.MustParseAddr("93.184.216.34")}, Store: store,
+		Interceptor: interceptor, Secrets: proxyTestBroker(t),
+		DialContext: func(context.Context, string, string) (net.Conn, error) {
+			proxySide, upstreamSide := net.Pipe()
+			go func() {
+				defer upstreamSide.Close()
+				data := make([]byte, len("hello"))
+				if _, err := io.ReadFull(upstreamSide, data); err != nil {
+					t.Errorf("upstream read: %v", err)
+					return
+				}
+				if string(data) != "hello" {
+					t.Errorf("upstream received %q", data)
+				}
+				_, _ = io.WriteString(upstreamSide, "world")
+			}()
+			return proxySide, nil
+		},
+	}
+	defer h.Close()
+	server := httptest.NewServer(h)
+	defer server.Close()
+
+	address := strings.TrimPrefix(server.URL, "http://")
+	conn, err := net.DialTimeout("tcp", address, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := fmt.Fprintf(conn, "CONNECT allowed.example:443 HTTP/1.1\r\nHost: allowed.example:443\r\nProxy-Authorization: Bearer 012345678901234567890123\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(conn)
+	status, err := reader.ReadString('\n')
+	if err != nil || !strings.Contains(status, "200") {
+		t.Fatalf("CONNECT response = %q, %v", status, err)
+	}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatal(err)
+		}
+		if line == "\r\n" {
+			break
+		}
+	}
+	if _, err := io.WriteString(conn, "hello"); err != nil {
+		t.Fatal(err)
+	}
+	world := make([]byte, len("world"))
+	if _, err := io.ReadFull(reader, world); err != nil {
+		t.Fatal(err)
+	}
+	if string(world) != "world" {
+		t.Fatalf("tunnel response = %q", world)
+	}
+	if got := interceptor.calls.Load(); got != 0 {
+		t.Fatalf("TLS interception calls = %d, want 0", got)
+	}
+
+	items := storedFlows(t, store, 1)
+	if len(items) != 1 || items[0].Mode != "opaque-tunnel" || items[0].Decision != "allowed" {
 		t.Fatalf("flows = %#v", items)
 	}
 }

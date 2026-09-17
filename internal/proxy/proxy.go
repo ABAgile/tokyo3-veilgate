@@ -186,7 +186,8 @@ func (c brokerChain) PlaceholderNames(data []byte) []string {
 
 // Handler is an authenticated HTTP forward proxy. When Interceptor is set,
 // HTTPS CONNECT sessions are terminated and their HTTP/1.1 or HTTP/2 requests
-// mediated; otherwise CONNECT remains an explicitly identified opaque tunnel.
+// mediated unless the authenticated client marks the destination as opaque;
+// otherwise CONNECT remains an explicitly identified opaque tunnel.
 type Handler struct {
 	Policy                        *config.File
 	Resolver                      Resolver
@@ -328,13 +329,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.Decision = "allowed"
 
 	if r.Method == http.MethodConnect {
-		if h.Interceptor != nil {
+		opaque := client.UsesOpaqueTunnel(host)
+		if h.Interceptor != nil && !opaque {
 			f.Mode = "intercepted-session"
 			f.Trace("tls-mediation", "pass", "HTTP/2 or HTTP/1.1 interception selected")
 			f.Status, f.BytesSent, f.BytesReceived, f.Reason = h.intercept(w, r, client, host, port, f.SessionID)
 			return
 		}
-		if h.Secrets != nil {
+		if h.Secrets != nil && !opaque {
 			f.Decision = "denied"
 			f.Status = http.StatusServiceUnavailable
 			f.Reason = "secret broker requires TLS interception"
@@ -343,7 +345,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		f.Mode = "opaque-tunnel"
-		f.Trace("tls-mediation", "pass", "opaque tunnel selected")
+		if opaque {
+			f.Trace("tls-mediation", "pass", "opaque tunnel selected by client policy")
+		} else {
+			f.Trace("tls-mediation", "pass", "opaque tunnel selected")
+		}
 		f.Status, f.BytesSent, f.BytesReceived, f.Reason = h.tunnel(w, r, ip, port)
 		return
 	}

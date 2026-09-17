@@ -46,6 +46,34 @@ func TestClientAllowsExactAndWildcardHosts(t *testing.T) {
 	}
 }
 
+func TestClientUsesOpaqueTunnelForConfiguredHosts(t *testing.T) {
+	f := &File{Clients: []Client{{
+		Name:         "agent",
+		Token:        "012345678901234567890123",
+		AllowedHosts: []string{"*.npmjs.org", "*.github.com"},
+		OpaqueHosts:  []string{"REGISTRY.NPMJS.ORG.", "*.GitHub.com"},
+		AllowedPorts: []int{443},
+	}}}
+	if err := f.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	client := &f.Clients[0]
+	for _, tc := range []struct {
+		host string
+		want bool
+	}{
+		{"registry.npmjs.org", true},
+		{"REGISTRY.NPMJS.ORG.", true},
+		{"packages.github.com", true},
+		{"github.com", false},
+		{"evilgithub.com", false},
+	} {
+		if got := client.UsesOpaqueTunnel(tc.host); got != tc.want {
+			t.Errorf("UsesOpaqueTunnel(%q) = %v, want %v", tc.host, got, tc.want)
+		}
+	}
+}
+
 func TestClientObservesAnyValidHostOnAllowedPorts(t *testing.T) {
 	f := &File{Clients: []Client{{
 		Name: "observer", Token: "012345678901234567890123",
@@ -157,6 +185,7 @@ func TestValidateRejectsUnsafeConfiguration(t *testing.T) {
 		{"short token", File{Clients: []Client{{Name: "a", Token: "short", AllowedHosts: []string{"example.com"}}}}},
 		{"no destination policy", File{Clients: []Client{{Name: "a", Token: "012345678901234567890123"}}}},
 		{"middle wildcard", File{Clients: []Client{{Name: "a", Token: "012345678901234567890123", AllowedHosts: []string{"api.*.example.com"}}}}},
+		{"opaque middle wildcard", File{Clients: []Client{{Name: "a", Token: "012345678901234567890123", AllowedHosts: []string{"example.com"}, OpaqueHosts: []string{"api.*.example.com"}}}}},
 		{"unicode", File{Clients: []Client{{Name: "a", Token: "012345678901234567890123", AllowedHosts: []string{"éxample.com"}}}}},
 		{"duplicate token", File{Clients: []Client{
 			{Name: "low", Token: "012345678901234567890123", AllowedHosts: []string{"example.com"}},

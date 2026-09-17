@@ -4,6 +4,7 @@
       "name": "agent-dev",
       "token": "7A6dsyAcwBa7NkD9yuAsyacW",
       "observe_all_public_hosts": true,
+      "opaque_hosts": ["registry.npmjs.org"],
       "allowed_hosts": [
         "api.openai.com",
         "google.com",

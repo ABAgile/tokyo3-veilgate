@@ -273,6 +273,7 @@ A client allows exact hosts or leftmost-label wildcards:
       "name": "agent-dev",
       "token": "a-long-random-lifecycle-scoped-token",
       "allowed_hosts": ["api.openai.com", "*.npmjs.org"],
+      "opaque_hosts": ["registry.npmjs.org"],
       "allowed_ports": [443]
     }
   ]
@@ -281,6 +282,14 @@ A client allows exact hosts or leftmost-label wildcards:
 
 `*.example.com` matches subdomains but not `example.com`. Direct IP targets are
 rejected. When `allowed_ports` is omitted it defaults to `[443]`.
+
+`opaque_hosts` uses the same exact-host and leftmost-label wildcard syntax. It
+only selects the mediation mode; a destination must still pass `allowed_hosts`
+(or `observe_all_public_hosts`) and `allowed_ports`. For HTTPS CONNECT targets
+listed there, Veilgate keeps the connection as an opaque TCP tunnel even when
+TLS interception is enabled. Authentication, public-DNS/IP checks, timeouts,
+byte accounting, and audit recording still apply, but TLS application contents,
+secret substitution, and application-data captures are unavailable for that session.
 
 For a short-lived broad-egress client, explicit host matching can be replaced
 with authenticated access to any valid hostname whose resolved address passes

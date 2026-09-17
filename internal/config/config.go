@@ -26,6 +26,7 @@ type Client struct {
 	Name                  string   `json:"name"`
 	Token                 string   `json:"token"`
 	AllowedHosts          []string `json:"allowed_hosts,omitempty"`
+	OpaqueHosts           []string `json:"opaque_hosts,omitempty"`
 	AllowedPorts          []int    `json:"allowed_ports,omitempty"`
 	ObserveAllPublicHosts bool     `json:"observe_all_public_hosts,omitempty"`
 }
@@ -90,6 +91,13 @@ func (f *File) Validate() error {
 				return fmt.Errorf("client %q allowed_hosts[%d]: %w", c.Name, j, err)
 			}
 			c.AllowedHosts[j] = normalized
+		}
+		for j, pattern := range c.OpaqueHosts {
+			normalized, err := normalizePattern(pattern)
+			if err != nil {
+				return fmt.Errorf("client %q opaque_hosts[%d]: %w", c.Name, j, err)
+			}
+			c.OpaqueHosts[j] = normalized
 		}
 		if len(c.AllowedPorts) == 0 {
 			c.AllowedPorts = []int{443}
@@ -158,4 +166,12 @@ func (c *Client) Allows(host string, port int) bool {
 		return true
 	}
 	return hostpattern.Matches(c.AllowedHosts, host)
+}
+
+// UsesOpaqueTunnel reports whether an allowed destination should remain an
+// opaque TCP tunnel instead of being TLS-intercepted. OpaqueHosts does not
+// grant destination access; Allows must still succeed separately.
+func (c *Client) UsesOpaqueTunnel(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	return validHostname(host) && hostpattern.Matches(c.OpaqueHosts, host)
 }
