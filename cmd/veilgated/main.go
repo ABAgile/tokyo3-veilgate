@@ -40,9 +40,9 @@
 //	                            "/var/lib/veilgate/auth.json"). Keep outside sandbox mounts.
 //	VEILGATED_DIAL_TIMEOUT      Upstream connection timeout (default "10s").
 //	VEILGATED_SESSION_IDLE_TIMEOUT Close sessions after this period without I/O
-//	                            (default "5m").
+//	                            (default "10m").
 //	VEILGATED_SESSION_MAX_DURATION Maximum lifetime of one proxy request/session
-//	                            (default "30m").
+//	                            (default "2h").
 //	VEILGATED_UPSTREAM_RESPONSE_HEADER_TIMEOUT Maximum wait for upstream response
 //	                            headers (default "60s").
 //	VEILGATED_CAPTURE_LIMIT_BYTES Maximum retained content per capture section
@@ -174,7 +174,7 @@ func runServe(ctx context.Context) error {
 		return err
 	}
 	if sessionIdleTimeout == 0 {
-		sessionIdleTimeout = 5 * time.Minute
+		sessionIdleTimeout = 10 * time.Minute
 	}
 	if sessionIdleTimeout < time.Second || sessionIdleTimeout > 24*time.Hour {
 		return errors.New("VEILGATED_SESSION_IDLE_TIMEOUT must be between 1s and 24h")
@@ -184,7 +184,7 @@ func runServe(ctx context.Context) error {
 		return err
 	}
 	if sessionMaxDuration == 0 {
-		sessionMaxDuration = 30 * time.Minute
+		sessionMaxDuration = 2 * time.Hour
 	}
 	if sessionMaxDuration < sessionIdleTimeout || sessionMaxDuration > 7*24*time.Hour {
 		return errors.New("VEILGATED_SESSION_MAX_DURATION must be at least the idle timeout and at most 168h")

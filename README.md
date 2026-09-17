@@ -710,8 +710,8 @@ remain omitted.
 | `VEILGATED_OAUTH_FILE` | no | `/etc/veilgate/oauth.json` when non-empty | OAuth broker policy JSON; requires interception |
 | `VEILGATED_AUTH_FILE` | no | `/var/lib/veilgate/auth.json` | Plaintext OAuth runtime token state |
 | `VEILGATED_DIAL_TIMEOUT` | no | `10s` | Upstream connection timeout |
-| `VEILGATED_SESSION_IDLE_TIMEOUT` | no | `5m` | Close proxy sessions after inactivity; 1s–24h |
-| `VEILGATED_SESSION_MAX_DURATION` | no | `30m` | Maximum proxy request/session lifetime; at most 168h |
+| `VEILGATED_SESSION_IDLE_TIMEOUT` | no | `10m` | Close proxy sessions after inactivity; 1s–24h |
+| `VEILGATED_SESSION_MAX_DURATION` | no | `2h` | Maximum proxy request/session lifetime; at most 168h |
 | `VEILGATED_UPSTREAM_RESPONSE_HEADER_TIMEOUT` | no | `60s` | Maximum wait for upstream response headers; 1s–10m |
 | `VEILGATED_CAPTURE_LIMIT_BYTES` | no | `1048576` | Maximum retained bytes per capture section; 1024–4194304 |
 | `VEILGATED_MEDIATION_LIMIT_BYTES` | no | `8388608` | Maximum decoded body or WebSocket message; also sizes the intercepted HTTP/2 stream cap; at least capture limit, at most 67108864 |

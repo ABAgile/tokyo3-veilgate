@@ -46,8 +46,8 @@ const (
 	recordDeniedEnqueueTimeout   = 100 * time.Millisecond
 	recordDropNoticeInterval     = 10 * time.Second
 	recordShutdownTimeout        = 5 * time.Second
-	defaultSessionIdleTimeout    = 5 * time.Minute
-	defaultSessionMaxDuration    = 30 * time.Minute
+	defaultSessionIdleTimeout    = 10 * time.Minute
+	defaultSessionMaxDuration    = 2 * time.Hour
 	defaultResponseHeaderTimeout = 60 * time.Second
 )
 
