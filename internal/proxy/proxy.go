@@ -783,6 +783,13 @@ func (h *Handler) handleInterceptedRequest(downstream io.Writer, downstreamReade
 	resp.Close = req.Close
 	var received int64
 	resp.Body = &countingReadCloser{ReadCloser: resp.Body, n: &received}
+	// The upstream transport may return HTTP/2, but the decrypted downstream
+	// session is an HTTP/1.1 connection. Keep Response.Write's framing logic
+	// (including Content-Length and trailers) while forcing its status line to
+	// use the protocol version the downstream can parse.
+	resp.Proto = "HTTP/1.1"
+	resp.ProtoMajor = 1
+	resp.ProtoMinor = 1
 	if err := resp.Write(downstream); err != nil {
 		return resp.StatusCode, sent, received, safeReason(err), true
 	}
