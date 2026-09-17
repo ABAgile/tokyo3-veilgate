@@ -5,7 +5,9 @@ import (
 	"bufio"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -637,9 +639,54 @@ func (h *Handler) intercept(w http.ResponseWriter, outer *http.Request, identity
 	if handshakeTimeout == 0 {
 		handshakeTimeout = 10 * time.Second
 	}
+	handshakeStarted := time.Now()
 	handshakeCtx, cancel := context.WithTimeout(outer.Context(), handshakeTimeout)
 	defer cancel()
 	if err := tlsClient.HandshakeContext(handshakeCtx); err != nil {
+		requestContextErr := outer.Context().Err()
+		handshakeContextErr := handshakeCtx.Err()
+		attrs := []any{
+			"host", host,
+			"port", port,
+			"remote_addr", connectionAddr(client.RemoteAddr()),
+			"local_addr", connectionAddr(client.LocalAddr()),
+			"elapsed", time.Since(handshakeStarted),
+			"timeout", handshakeTimeout,
+			"handshake_error", err,
+			"request_context_canceled", errors.Is(requestContextErr, context.Canceled),
+			"request_context_deadline", errors.Is(requestContextErr, context.DeadlineExceeded),
+			"handshake_context_canceled", errors.Is(handshakeContextErr, context.Canceled),
+			"handshake_context_deadline", errors.Is(handshakeContextErr, context.DeadlineExceeded),
+		}
+		if requestContextErr != nil {
+			attrs = append(attrs, "request_context_error", requestContextErr)
+		}
+		if summary := summarizeCertificate(tlsConfig, host); summary.ok {
+			attrs = append(attrs,
+				"leaf_sha256", summary.sha256,
+				"leaf_serial", summary.serial,
+				"leaf_not_before", summary.notBefore,
+				"leaf_not_after", summary.notAfter,
+			)
+			if summary.issuerSHA256 != "" {
+				attrs = append(attrs,
+					"issuer_sha256", summary.issuerSHA256,
+					"issuer_not_after", summary.issuerNotAfter,
+				)
+			}
+		}
+		log := h.Log
+		if log == nil {
+			log = slog.Default()
+		}
+		if errors.Is(err, context.Canceled) && errors.Is(requestContextErr, context.Canceled) && errors.Is(handshakeContextErr, context.Canceled) {
+			// A canceled request context means the peer abandoned the CONNECT
+			// before completing TLS. It is not an actionable gateway failure;
+			// retain the details for debug logging without emitting a warning.
+			log.Log(context.Background(), slog.LevelDebug, "intercept TLS handshake canceled by peer", attrs...)
+		} else {
+			log.Warn("intercept TLS handshake failed", attrs...)
+		}
 		return http.StatusOK, 0, 0, safeReason(fmt.Errorf("intercept TLS handshake: %w", err))
 	}
 	defer tlsClient.Close()
@@ -1053,6 +1100,66 @@ func copyHeaders(dst, src http.Header) {
 			dst.Add(key, value)
 		}
 	}
+}
+
+type leafCertificateSummary struct {
+	ok             bool
+	sha256         string
+	serial         string
+	notBefore      time.Time
+	notAfter       time.Time
+	issuerSHA256   string
+	issuerNotAfter time.Time
+}
+
+func summarizeCertificate(config *tls.Config, host string) leafCertificateSummary {
+	if config == nil {
+		return leafCertificateSummary{}
+	}
+	var certificate *tls.Certificate
+	if config.GetCertificate != nil {
+		var err error
+		certificate, err = config.GetCertificate(&tls.ClientHelloInfo{ServerName: host})
+		if err != nil {
+			return leafCertificateSummary{}
+		}
+	} else if len(config.Certificates) > 0 {
+		certificate = &config.Certificates[0]
+	}
+	if certificate == nil || len(certificate.Certificate) == 0 {
+		return leafCertificateSummary{}
+	}
+	leaf := certificate.Leaf
+	if leaf == nil {
+		var err error
+		leaf, err = x509.ParseCertificate(certificate.Certificate[0])
+		if err != nil {
+			return leafCertificateSummary{}
+		}
+	}
+	digest := sha256.Sum256(certificate.Certificate[0])
+	summary := leafCertificateSummary{
+		ok:        true,
+		sha256:    hex.EncodeToString(digest[:]),
+		serial:    leaf.SerialNumber.String(),
+		notBefore: leaf.NotBefore,
+		notAfter:  leaf.NotAfter,
+	}
+	if len(certificate.Certificate) > 1 {
+		issuerDigest := sha256.Sum256(certificate.Certificate[1])
+		summary.issuerSHA256 = hex.EncodeToString(issuerDigest[:])
+		if issuer, err := x509.ParseCertificate(certificate.Certificate[1]); err == nil {
+			summary.issuerNotAfter = issuer.NotAfter
+		}
+	}
+	return summary
+}
+
+func connectionAddr(addr net.Addr) string {
+	if addr == nil {
+		return ""
+	}
+	return addr.String()
 }
 
 func (h *Handler) closeOnContext(ctx context.Context, name string, closers ...io.Closer) func() {
