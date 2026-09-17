@@ -342,11 +342,14 @@ after client, destination, SNI, Host, DNS, and IP checks pass. Supported
 placements are HTTPS header values, exact query values, exact JSON string
 values, exact form values, and exact JSON string values in outbound WebSocket
 text messages. Basic authentication values are decoded, substituted, and
-re-encoded. URL paths, binary content, embedded partial placeholders,
-plaintext HTTP use, and use outside the configured client/host scope fail
-closed. Secret definitions retain their independent `clients` and
-`allowed_hosts` checks when a client enables `observe_all_public_hosts`; broad
-destination observation never broadens a secret's authorized hosts.
+re-encoded. Embedded placeholder text inside JSON string or form values is
+preserved as ordinary content unless it is the complete value. Placeholder
+occurrences in headers, query names or values, JSON/form field names, URL paths,
+binary or unsupported bodies, plaintext HTTP use, and use outside the
+configured client/host scope fail closed. Secret definitions retain their
+independent `clients` and `allowed_hosts` checks when a client enables
+`observe_all_public_hosts`; broad destination observation never broadens a
+secret's authorized hosts.
 
 Resolved secret values must be 8–16384 bytes so response matching remains
 specific. Configured values reflected through HTTPS response headers, bodies,

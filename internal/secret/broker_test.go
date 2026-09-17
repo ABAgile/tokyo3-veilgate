@@ -132,16 +132,43 @@ func TestSubstituteQueryAndJSONBody(t *testing.T) {
 	}
 }
 
-func TestSubstitutionRejectsEmbeddedAndPlaintextPlaceholders(t *testing.T) {
+func TestSubstitutionPreservesEmbeddedBodyPlaceholders(t *testing.T) {
 	broker := testBroker(t)
-	for _, body := range []string{
-		`{"token":"prefix-` + testPlaceholder + `"}`,
-		`{"token":"` + testPlaceholder + `"}`,
+	for _, tc := range []struct {
+		contentType string
+		body        string
+	}{
+		{"application/json", `{"prompt":"prefix-` + testPlaceholder + `-suffix"}`},
+		{"application/x-www-form-urlencoded", "prompt=" + url.QueryEscape("prefix-"+testPlaceholder+"-suffix")},
 	} {
-		secure := strings.Contains(body, "prefix-")
-		if _, _, _, err := broker.SubstituteBody("application/json", []byte(body), "agent", "api.example.com", secure); err == nil {
-			t.Fatalf("SubstituteBody(%q, secure=%t) succeeded", body, secure)
+		body, names, supported, err := broker.SubstituteBody(tc.contentType, []byte(tc.body), "agent", "api.example.com", true)
+		if err != nil {
+			t.Fatalf("SubstituteBody(%q) error = %v", tc.contentType, err)
 		}
+		if !supported || len(names) != 0 || string(body) != tc.body {
+			t.Fatalf("SubstituteBody(%q) = %q, names = %#v, supported = %t", tc.contentType, body, names, supported)
+		}
+	}
+}
+
+func TestSubstitutionStillRejectsPlaintextBodyPlaceholders(t *testing.T) {
+	body := []byte(`{"token":"` + testPlaceholder + `"}`)
+	if _, _, _, err := testBroker(t).SubstituteBody("application/json", body, "agent", "api.example.com", false); err == nil {
+		t.Fatal("SubstituteBody accepted a placeholder over plaintext HTTP")
+	} else if !strings.Contains(err.Error(), "cannot be used over plaintext HTTP") {
+		t.Fatalf("SubstituteBody error = %q", err)
+	}
+}
+
+func TestSubstitutionStillRejectsEmbeddedQueryPlaceholders(t *testing.T) {
+	u, err := url.Parse("https://api.example.com/v1?key=" + url.QueryEscape("prefix-"+testPlaceholder+"-suffix"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := testBroker(t).SubstituteQuery(u, "agent", "api.example.com", true); err == nil {
+		t.Fatal("SubstituteQuery accepted an embedded placeholder")
+	} else if !strings.Contains(err.Error(), "complete value") {
+		t.Fatalf("SubstituteQuery error = %q", err)
 	}
 }
 

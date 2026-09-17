@@ -50,7 +50,8 @@ func (b *Broker) SubstituteQuery(u *url.URL, client, host string, secure bool) (
 }
 
 // SubstituteBody replaces exact placeholders in JSON string values or form
-// values. The boolean reports whether the media type is safe for text capture.
+// values. Embedded placeholder text in those values remains ordinary content.
+// The boolean reports whether the media type is safe for text capture.
 // Unsupported bodies containing a known placeholder fail closed.
 func (b *Broker) SubstituteBody(contentType string, body []byte, client, host string, secure bool) ([]byte, []string, bool, error) {
 	if len(body) == 0 {
@@ -93,7 +94,7 @@ func (b *Broker) SubstituteBody(contentType string, body []byte, client, host st
 				return nil, nil, true, errors.New("secret placeholders are not allowed in form names")
 			}
 			for i, value := range entries {
-				replaced, item, err := b.substituteExact(value, client, host, secure)
+				replaced, item, err := b.substituteBodyValue(value, client, host, secure)
 				if err != nil {
 					return nil, nil, true, err
 				}
@@ -237,7 +238,7 @@ func (b *Broker) PlaceholderNames(data []byte) []string {
 func (b *Broker) transformJSON(value any, client, host string, secure bool, used map[string]struct{}) (any, error) {
 	switch typed := value.(type) {
 	case string:
-		replaced, item, err := b.substituteExact(typed, client, host, secure)
+		replaced, item, err := b.substituteBodyValue(typed, client, host, secure)
 		if item != nil {
 			used[item.Name] = struct{}{}
 		}
@@ -269,6 +270,14 @@ func (b *Broker) transformJSON(value any, client, host string, secure bool, used
 }
 
 func (b *Broker) substituteExact(value, client, host string, secure bool) (string, *resolved, error) {
+	return b.substituteValue(value, client, host, secure, true)
+}
+
+func (b *Broker) substituteBodyValue(value, client, host string, secure bool) (string, *resolved, error) {
+	return b.substituteValue(value, client, host, secure, false)
+}
+
+func (b *Broker) substituteValue(value, client, host string, secure, rejectEmbedded bool) (string, *resolved, error) {
 	for i := range b.secrets {
 		item := &b.secrets[i]
 		if value == item.Placeholder {
@@ -283,7 +292,7 @@ func (b *Broker) substituteExact(value, client, host string, secure bool) (strin
 			}
 			return item.value, item, nil
 		}
-		if strings.Contains(value, item.Placeholder) {
+		if rejectEmbedded && strings.Contains(value, item.Placeholder) {
 			return value, nil, fmt.Errorf("secret %q placeholder must occupy the complete value", item.Name)
 		}
 	}
