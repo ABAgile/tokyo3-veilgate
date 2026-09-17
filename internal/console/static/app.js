@@ -114,6 +114,13 @@
     return `${(value / 1048576).toFixed(1)} MiB`;
   }
 
+  function received(item) {
+    const wire = bytes(item.bytes_received || 0);
+    const decoded = item.bytes_received_decoded;
+    if (!Number.isFinite(decoded) || decoded <= 0 || decoded === item.bytes_received) return wire;
+    return `${wire} (${bytes(decoded)} decoded)`;
+  }
+
   function cell(row, label, text, className) {
     const td = document.createElement("td");
     td.dataset.label = label;
@@ -416,7 +423,7 @@
       ["HTTP status", item.status || "Not available"], ["Reason", item.reason || "Completed"],
       ["Secrets substituted", (item.secret_names || []).join(", ") || "None"],
       ["Secrets scrubbed", (item.response_secret_names || []).join(", ") || "None"],
-      ["Sent", bytes(item.bytes_sent)], ["Received", bytes(item.bytes_received)],
+      ["Sent", bytes(item.bytes_sent)], ["Received", received(item)],
       ["Duration", duration(item.duration_ns)]
     ];
     for (const [name, value] of fields) {

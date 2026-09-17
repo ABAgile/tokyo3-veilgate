@@ -66,29 +66,30 @@ type TrafficCapture struct {
 
 // Flow is the sanitized record of one proxy request or tunnel.
 type Flow struct {
-	ID                  uint64         `json:"id"`
-	SessionID           string         `json:"session_id,omitempty"`
-	StartedAt           time.Time      `json:"started_at"`
-	Duration            time.Duration  `json:"duration_ns"`
-	Client              string         `json:"client,omitempty"`
-	Method              string         `json:"method"`
-	Scheme              string         `json:"scheme"`
-	Host                string         `json:"host"`
-	Port                int            `json:"port"`
-	Path                string         `json:"path,omitempty"`
-	Mode                string         `json:"mode"`
-	DownstreamProtocol  string         `json:"downstream_protocol,omitempty"`
-	UpstreamProtocol    string         `json:"upstream_protocol,omitempty"`
-	DestinationIP       string         `json:"destination_ip,omitempty"`
-	Decision            string         `json:"decision"`
-	Reason              string         `json:"reason,omitempty"`
-	Status              int            `json:"status,omitempty"`
-	BytesSent           int64          `json:"bytes_sent"`
-	BytesReceived       int64          `json:"bytes_received"`
-	SecretNames         []string       `json:"secret_names,omitempty"`
-	ResponseSecretNames []string       `json:"response_secret_names,omitempty"`
-	PolicyTrace         []PolicyStep   `json:"policy_trace,omitempty"`
-	Capture             TrafficCapture `json:"capture"`
+	ID                   uint64         `json:"id"`
+	SessionID            string         `json:"session_id,omitempty"`
+	StartedAt            time.Time      `json:"started_at"`
+	Duration             time.Duration  `json:"duration_ns"`
+	Client               string         `json:"client,omitempty"`
+	Method               string         `json:"method"`
+	Scheme               string         `json:"scheme"`
+	Host                 string         `json:"host"`
+	Port                 int            `json:"port"`
+	Path                 string         `json:"path,omitempty"`
+	Mode                 string         `json:"mode"`
+	DownstreamProtocol   string         `json:"downstream_protocol,omitempty"`
+	UpstreamProtocol     string         `json:"upstream_protocol,omitempty"`
+	DestinationIP        string         `json:"destination_ip,omitempty"`
+	Decision             string         `json:"decision"`
+	Reason               string         `json:"reason,omitempty"`
+	Status               int            `json:"status,omitempty"`
+	BytesSent            int64          `json:"bytes_sent"`
+	BytesReceived        int64          `json:"bytes_received"`
+	BytesReceivedDecoded int64          `json:"bytes_received_decoded"` // decompressed response-body bytes
+	SecretNames          []string       `json:"secret_names,omitempty"`
+	ResponseSecretNames  []string       `json:"response_secret_names,omitempty"`
+	PolicyTrace          []PolicyStep   `json:"policy_trace,omitempty"`
+	Capture              TrafficCapture `json:"capture"`
 }
 
 // Trace appends a policy step without recording credentials or unsanitized data.
@@ -475,6 +476,7 @@ func openSQLite(path string, capacity int) (*sqliteStore, error) {
 			status INTEGER NOT NULL,
 			bytes_sent INTEGER NOT NULL,
 			bytes_received INTEGER NOT NULL,
+			bytes_received_decoded INTEGER NOT NULL,
 			secret_names TEXT NOT NULL,
 			policy_trace TEXT NOT NULL
 		)`,
@@ -496,6 +498,7 @@ func openSQLite(path string, capacity int) (*sqliteStore, error) {
 		{"session_id", `TEXT NOT NULL DEFAULT ''`},
 		{"downstream_protocol", `TEXT NOT NULL DEFAULT ''`},
 		{"upstream_protocol", `TEXT NOT NULL DEFAULT ''`},
+		{"bytes_received_decoded", `INTEGER NOT NULL DEFAULT 0`},
 	} {
 		exists, err := sqliteColumnExists(db, "flows", migration.column)
 		if err != nil {
@@ -513,7 +516,7 @@ func openSQLite(path string, capacity int) (*sqliteStore, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("initialize flow session index: %w", err)
 	}
-	if _, err := db.Exec(`PRAGMA user_version = 4`); err != nil {
+	if _, err := db.Exec(`PRAGMA user_version = 5`); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("set flow database version: %w", err)
 	}
@@ -640,13 +643,13 @@ func (s *sqliteStore) Add(ctx context.Context, item Flow, capacity int) (Flow, e
 	result, err := tx.ExecContext(ctx, `INSERT INTO flows (
 		started_at_ns, duration_ns, client, method, scheme, host, port, path, mode,
 		destination_ip, decision, reason, status, bytes_sent, bytes_received,
-		secret_names, policy_trace, response_secret_names, capture, session_id,
-		downstream_protocol, upstream_protocol
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		bytes_received_decoded, secret_names, policy_trace, response_secret_names,
+		capture, session_id, downstream_protocol, upstream_protocol
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		item.StartedAt.UnixNano(), int64(item.Duration), item.Client, item.Method,
 		item.Scheme, item.Host, item.Port, item.Path, item.Mode, item.DestinationIP,
 		item.Decision, item.Reason, item.Status, item.BytesSent, item.BytesReceived,
-		string(secretNames), string(policyTrace), string(responseSecretNames), string(capture), item.SessionID,
+		item.BytesReceivedDecoded, string(secretNames), string(policyTrace), string(responseSecretNames), string(capture), item.SessionID,
 		item.DownstreamProtocol, item.UpstreamProtocol)
 	if err != nil {
 		return Flow{}, fmt.Errorf("insert flow: %w", err)
@@ -674,11 +677,13 @@ func (s *sqliteStore) Add(ctx context.Context, item Flow, capacity int) (Flow, e
 const (
 	flowSelect = `id, started_at_ns, duration_ns, client, method, scheme, host,
 		port, path, mode, destination_ip, decision, reason, status, bytes_sent,
-		bytes_received, secret_names, policy_trace, response_secret_names, capture,
-		session_id, downstream_protocol, upstream_protocol`
+		bytes_received, bytes_received_decoded, secret_names, policy_trace,
+		response_secret_names, capture, session_id, downstream_protocol,
+		upstream_protocol`
 	flowSummarySelect = `id, started_at_ns, duration_ns, client, method, scheme, host,
 		port, path, mode, destination_ip, decision, reason, status, bytes_sent,
-		bytes_received, session_id, downstream_protocol, upstream_protocol`
+		bytes_received, bytes_received_decoded, session_id, downstream_protocol,
+		upstream_protocol`
 )
 
 func (s *sqliteStore) List(ctx context.Context, filter Filter, _ int) ([]Flow, error) {
@@ -768,8 +773,8 @@ func buildFlowQuery(columns string, filter Filter) (string, []any) {
 func (s *sqliteStore) Get(ctx context.Context, id uint64) (Flow, bool, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, started_at_ns, duration_ns, client,
 		method, scheme, host, port, path, mode, destination_ip, decision, reason,
-		status, bytes_sent, bytes_received, secret_names, policy_trace,
-		response_secret_names, capture, session_id, downstream_protocol,
+		status, bytes_sent, bytes_received, bytes_received_decoded, secret_names,
+		policy_trace, response_secret_names, capture, session_id, downstream_protocol,
 		upstream_protocol FROM flows WHERE id = ?`, id)
 	item, err := scanFlow(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -791,8 +796,8 @@ func scanFlowSummary(row scanner) (Flow, error) {
 	if err := row.Scan(&item.ID, &startedAt, &duration, &item.Client, &item.Method,
 		&item.Scheme, &item.Host, &item.Port, &item.Path, &item.Mode,
 		&item.DestinationIP, &item.Decision, &item.Reason, &item.Status,
-		&item.BytesSent, &item.BytesReceived, &item.SessionID,
-		&item.DownstreamProtocol, &item.UpstreamProtocol); err != nil {
+		&item.BytesSent, &item.BytesReceived, &item.BytesReceivedDecoded,
+		&item.SessionID, &item.DownstreamProtocol, &item.UpstreamProtocol); err != nil {
 		return Flow{}, err
 	}
 	item.StartedAt = time.Unix(0, startedAt).UTC()
@@ -807,9 +812,9 @@ func scanFlow(row scanner) (Flow, error) {
 	if err := row.Scan(&item.ID, &startedAt, &duration, &item.Client, &item.Method,
 		&item.Scheme, &item.Host, &item.Port, &item.Path, &item.Mode,
 		&item.DestinationIP, &item.Decision, &item.Reason, &item.Status,
-		&item.BytesSent, &item.BytesReceived, &secretNames, &policyTrace,
-		&responseSecretNames, &capture, &item.SessionID, &item.DownstreamProtocol,
-		&item.UpstreamProtocol); err != nil {
+		&item.BytesSent, &item.BytesReceived, &item.BytesReceivedDecoded,
+		&secretNames, &policyTrace, &responseSecretNames, &capture, &item.SessionID,
+		&item.DownstreamProtocol, &item.UpstreamProtocol); err != nil {
 		return Flow{}, err
 	}
 	item.StartedAt = time.Unix(0, startedAt).UTC()

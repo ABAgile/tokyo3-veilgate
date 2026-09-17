@@ -672,9 +672,14 @@ data-loss prevention.
 Ordinary HTTP bodies are mediated up to
 `VEILGATED_MEDIATION_LIMIT_BYTES`; retained content is independently bounded by
 `VEILGATED_CAPTURE_LIMIT_BYTES` and marked truncated without rejecting otherwise
-safe traffic. SSE events and NDJSON records are scrubbed and flushed
-incrementally; the mediation limit applies to each decoded event or record, not
-the complete stream. HTTP `gzip`, `deflate`, Brotli (`br`), and Zstandard
+safe traffic. Flow records keep `bytes_received` as the received/forwarded body
+count and `bytes_received_decoded` as the decompressed response-body count when
+mediation completes; the latter is zero when decoding is unavailable or the
+flow has no mediated response body. SSE events and NDJSON records are scrubbed
+and flushed incrementally; the mediation limit applies to each decoded event
+or record, not the complete stream. The intercepted HTTP/2 stream cap reserves
+up to 512 MiB of mediation buffer budget, so increasing this limit reduces the
+number of concurrently admitted streams. HTTP `gzip`, `deflate`, Brotli (`br`), and Zstandard
 (`zstd`) bodies and streams
 are decoded for substitution, scrubbing, and capture, then re-encoded with their
 original coding. Stacked or unknown codings fail closed. WebSocket text and

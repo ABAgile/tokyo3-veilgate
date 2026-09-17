@@ -99,8 +99,8 @@ func TestCompressedResponseScrubbingAndHeaderCapture(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(decoded) != `{"token":"`+testPlaceholder+`"}` || item.Capture.ResponseBody == nil || item.Capture.ResponseBody.Text != `{"token":"[secret:api_key]"}` {
-		t.Fatalf("decoded = %q capture = %#v", decoded, item.Capture)
+	if string(decoded) != `{"token":"`+testPlaceholder+`"}` || item.BytesReceivedDecoded != int64(len(`{"token":"real-api-key"}`)) || item.Capture.ResponseBody == nil || item.Capture.ResponseBody.Text != `{"token":"[secret:api_key]"}` {
+		t.Fatalf("decoded = %q decoded size = %d capture = %#v", decoded, item.BytesReceivedDecoded, item.Capture)
 	}
 	if got := headerValues(item.Capture.ResponseHeaders)["Set-Cookie"]; got != "[redacted]" {
 		t.Fatalf("captured Set-Cookie = %q", got)

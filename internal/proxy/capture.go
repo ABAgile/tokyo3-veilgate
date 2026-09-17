@@ -171,6 +171,7 @@ func (h *Handler) mediateResponse(resp *http.Response, client, host string, item
 	if err != nil {
 		return &mediationError{http.StatusBadGateway, err}
 	}
+	item.BytesReceivedDecoded = int64(len(body))
 	var names []string
 	if h.OAuth != nil && resp.Request != nil {
 		transformed, oauthNames, err := h.OAuth.ObserveTokenResponse(resp.Request, resp, body, client, host)

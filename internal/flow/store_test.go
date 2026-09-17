@@ -116,6 +116,36 @@ func TestMemoryStoreBoundsFiltersAndPublishesFlows(t *testing.T) {
 	}
 }
 
+func TestStoreRetainsDecodedReceivedBytes(t *testing.T) {
+	ctx := context.Background()
+	for name, newStore := range map[string]func() *Store{
+		"memory": func() *Store { return NewStore(10) },
+		"sqlite": func() *Store {
+			store, err := Open("sqlite:"+filepath.Join(t.TempDir(), "decoded.db"), 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return store
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := newStore()
+			defer store.Close()
+			want := Flow{Host: "encoded.example", BytesReceived: 12, BytesReceivedDecoded: 34}
+			if _, err := store.Add(ctx, want); err != nil {
+				t.Fatal(err)
+			}
+			got, ok, err := store.Get(ctx, 1)
+			if err != nil || !ok {
+				t.Fatalf("Get() = %#v, %v, %v", got, ok, err)
+			}
+			if got.BytesReceived != want.BytesReceived || got.BytesReceivedDecoded != want.BytesReceivedDecoded {
+				t.Fatalf("Get() byte counts = %d/%d, want %d/%d", got.BytesReceived, got.BytesReceivedDecoded, want.BytesReceived, want.BytesReceivedDecoded)
+			}
+		})
+	}
+}
+
 func TestListPagePaginatesAndCompletesSessionParents(t *testing.T) {
 	ctx := context.Background()
 	for _, newStore := range map[string]func() *Store{

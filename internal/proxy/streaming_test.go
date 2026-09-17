@@ -77,7 +77,7 @@ func TestStreamingResponseFlushesCompleteSSEEventAndScrubsSplitSecret(t *testing
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	if item.Capture.ResponseBody == nil || item.Capture.ResponseBody.Text != "data: [secret:api_key]\n\n" {
+	if item.BytesReceivedDecoded != int64(len("data: real-api-key\n\n")) || item.Capture.ResponseBody == nil || item.Capture.ResponseBody.Text != "data: [secret:api_key]\n\n" {
 		t.Fatalf("capture = %#v", item.Capture)
 	}
 }

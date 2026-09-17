@@ -221,8 +221,8 @@ func TestMediateResponseTruncatesCaptureWithoutRejectingTraffic(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(resp.Body)
-	if string(body) != "12345" || !item.Capture.Truncated || item.Capture.ResponseBody == nil || item.Capture.ResponseBody.Text != "1234" {
-		t.Fatalf("body = %q capture = %#v", body, item.Capture)
+	if string(body) != "12345" || item.BytesReceivedDecoded != 5 || !item.Capture.Truncated || item.Capture.ResponseBody == nil || item.Capture.ResponseBody.Text != "1234" {
+		t.Fatalf("body = %q decoded = %d capture = %#v", body, item.BytesReceivedDecoded, item.Capture)
 	}
 }
 

@@ -184,7 +184,8 @@ func (h *Handler) streamResponseBody(resp *http.Response, output io.Writer, flus
 	if err != nil {
 		return received, err
 	}
-	defer decoder.Close()
+	decoded := &countingReadCloser{ReadCloser: decoder, n: &item.BytesReceivedDecoded}
+	defer decoded.Close()
 	encoder, err := streamingEncoder(output, encoding, rawDeflate)
 	if err != nil {
 		return received, err
@@ -197,7 +198,7 @@ func (h *Handler) streamResponseBody(resp *http.Response, output io.Writer, flus
 	}()
 	capture := streamCapture{item: item, limit: h.captureLimit(), broker: h.Secrets}
 	defer capture.finish()
-	reader := bufio.NewReaderSize(decoder, 32*1024)
+	reader := bufio.NewReaderSize(decoded, 32*1024)
 	for {
 		record, readErr := readStreamingRecord(reader, sse, h.mediationLimit())
 		if errors.Is(readErr, io.EOF) {
