@@ -139,6 +139,8 @@ func TestDecodedCompressionLimitFailsClosed(t *testing.T) {
 	}
 	if _, err := decodeHTTPBody(encoded, "gzip", 1024); err == nil {
 		t.Fatal("decodeHTTPBody succeeded")
+	} else if err.Error() != "decoded body exceeds mediation limit" {
+		t.Fatalf("decodeHTTPBody error = %q", err)
 	}
 }
 

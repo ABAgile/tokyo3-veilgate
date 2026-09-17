@@ -64,7 +64,7 @@ func decodeHTTPBody(data []byte, encoding string, limit int64) ([]byte, error) {
 	decoded, err := readBounded(reader, limit)
 	if err != nil {
 		if errors.Is(err, errCaptureLimit) {
-			return nil, errors.New("decoded body exceeds capture limit")
+			return nil, errors.New("decoded body exceeds mediation limit")
 		}
 		return nil, fmt.Errorf("decode %s body: %w", encoding, err)
 	}
@@ -101,7 +101,7 @@ func encodeHTTPBody(data []byte, encoding string, limit int64) ([]byte, error) {
 		return nil, fmt.Errorf("encode %s body: %w", encoding, err)
 	}
 	if int64(output.Len()) > limit {
-		return nil, errors.New("encoded body exceeds capture limit")
+		return nil, errors.New("encoded body exceeds mediation limit")
 	}
 	return output.Bytes(), nil
 }
