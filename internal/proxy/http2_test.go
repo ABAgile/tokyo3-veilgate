@@ -26,6 +26,12 @@ import (
 	"github.com/abagile/veilgate/internal/intercept"
 )
 
+func TestDefaultMediationLimit(t *testing.T) {
+	if got := (&Handler{}).mediationLimit(); got != 8<<20 {
+		t.Fatalf("mediationLimit() = %d, want %d", got, 8<<20)
+	}
+}
+
 func TestInterceptedHTTP2MaxConcurrentStreams(t *testing.T) {
 	for _, test := range []struct {
 		name  string
@@ -34,10 +40,12 @@ func TestInterceptedHTTP2MaxConcurrentStreams(t *testing.T) {
 	}{
 		{name: "default mediation limit", want: 32},
 		{name: "small limit is capped", limit: 1, want: 64},
-		{name: "four megabytes", limit: 4 << 20, want: 32},
-		{name: "eight megabytes", limit: 8 << 20, want: 16},
-		{name: "maximum configured limit", limit: 64 << 20, want: 2},
-		{name: "oversized limit remains one", limit: 128 << 20, want: 1},
+		{name: "four megabytes", limit: 4 << 20, want: 64},
+		{name: "eight megabytes", limit: 8 << 20, want: 32},
+		{name: "sixteen megabytes", limit: 16 << 20, want: 16},
+		{name: "thirty-two megabytes", limit: 32 << 20, want: 8},
+		{name: "maximum configured limit", limit: 64 << 20, want: 4},
+		{name: "oversized limit remains two", limit: 128 << 20, want: 2},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			h := &Handler{MediationLimit: test.limit}

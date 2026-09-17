@@ -48,7 +48,7 @@
 //	VEILGATED_CAPTURE_LIMIT_BYTES Maximum retained content per capture section
 //	                            (default 1048576; maximum 4194304).
 //	VEILGATED_MEDIATION_LIMIT_BYTES Maximum decoded request, response, or WebSocket
-//	                            message size (default 4194304; maximum 67108864).
+//	                            message size (default 8388608; maximum 67108864).
 //	VEILGATED_RECORD_QUEUE_CAPACITY Number of completed flows buffered for recording
 //	                            (default 256; minimum 1).
 //	VEILGATED_RECORD_WORKERS    Number of concurrent flow-recording workers
@@ -214,7 +214,7 @@ func runServe(ctx context.Context) error {
 		return err
 	}
 	if mediationLimit == 0 {
-		mediationLimit = 4 << 20
+		mediationLimit = 8 << 20
 	}
 	if mediationLimit < captureLimit || mediationLimit > 64<<20 {
 		return errors.New("VEILGATED_MEDIATION_LIMIT_BYTES must be at least the capture limit and at most 67108864")
