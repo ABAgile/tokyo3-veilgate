@@ -1,10 +1,13 @@
 package proxy
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -116,6 +119,100 @@ func newInterceptedHTTP2Client(t *testing.T, h *Handler, authority *intercept.Au
 		}
 	}
 	return transport, finish
+}
+
+func TestInterceptedHTTP1NormalizesHTTP2UpstreamResponse(t *testing.T) {
+	authority, roots := testHTTP2Authority(t)
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor != 2 {
+			t.Errorf("upstream protocol = %s, want h2", r.Proto)
+		}
+		body := "not found\n"
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, body)
+	}))
+	upstream.EnableHTTP2 = true
+	upstreamTLS, err := authority.TLSConfig("allowed.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream.TLS = upstreamTLS
+	upstream.StartTLS()
+	defer upstream.Close()
+
+	policy := &config.File{Clients: []config.Client{{
+		Name: "agent", Token: "012345678901234567890123",
+		AllowedHosts: []string{"allowed.example"}, AllowedPorts: []int{443},
+	}}}
+	if err := policy.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	h := &Handler{
+		Policy: policy, Resolver: fixedResolver{netip.MustParseAddr("93.184.216.34")},
+		Interceptor: authority, UpstreamTLSConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, upstream.Listener.Addr().String())
+		},
+	}
+	defer h.Close()
+
+	proxyServer := httptest.NewServer(h)
+	defer proxyServer.Close()
+	conn, err := net.DialTimeout("tcp", proxyServer.Listener.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := fmt.Fprintf(conn, "CONNECT allowed.example:443 HTTP/1.1\r\nHost: allowed.example:443\r\nProxy-Authorization: Bearer 012345678901234567890123\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	reader := bufio.NewReader(conn)
+	connectResponse, err := http.ReadResponse(reader, &http.Request{Method: http.MethodConnect})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = connectResponse.Body.Close()
+	if connectResponse.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT response status = %d", connectResponse.StatusCode)
+	}
+
+	tlsClient := tls.Client(&bufferedConn{Conn: conn, reader: reader}, &tls.Config{
+		RootCAs: roots, ServerName: "allowed.example", MinVersion: tls.VersionTLS12,
+		NextProtos: []string{"http/1.1"},
+	})
+	defer tlsClient.Close()
+	if err := tlsClient.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(tlsClient, "GET /not-found HTTP/1.1\r\nHost: allowed.example\r\nConnection: close\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	wire, err := io.ReadAll(tlsClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstLine, _, ok := bytes.Cut(wire, []byte("\r\n"))
+	if !ok {
+		t.Fatalf("response has no status line: %q", wire)
+	}
+	if got := string(firstLine); got != "HTTP/1.1 404 Not Found" {
+		t.Fatalf("response status line = %q, want %q", got, "HTTP/1.1 404 Not Found")
+	}
+
+	response, err := http.ReadResponse(bufio.NewReader(bytes.NewReader(wire)), &http.Request{Method: http.MethodGet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "not found\n" || response.ContentLength != int64(len(body)) {
+		t.Fatalf("response body = %q content length = %d", body, response.ContentLength)
+	}
 }
 
 func TestInterceptedHTTP2MediatesStreamingResponseAndTrailers(t *testing.T) {
