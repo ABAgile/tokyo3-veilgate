@@ -4,7 +4,7 @@
 # and the licence. Build with `--target server` for the runtime image.
 
 # ── Stage 1: Build veilgated ──────────────────────────────────────────────────
-FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
 
 ARG TARGETOS=linux
 ARG TARGETARCH=arm64

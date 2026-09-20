@@ -97,6 +97,7 @@ services:
       VEILGATED_CONSOLE_ADDR: "veilgated-console:${VEILGATED_CONSOLE_PORT:-8081}"
       VEILGATED_CONSOLE_USERNAME: "${VEILGATED_CONSOLE_USERNAME:?set VEILGATED_CONSOLE_USERNAME}"
       VEILGATED_CONSOLE_PASSWORD: "${VEILGATED_CONSOLE_PASSWORD:?set VEILGATED_CONSOLE_PASSWORD}"
+      VEILGATED_LOG_LEVEL: "${VEILGATED_LOG_LEVEL:-info}"
       # An empty value is harmless when config/secrets.json is absent.
       VEILGATED_DEV_API_KEY: "${VEILGATED_DEV_API_KEY:-}"
     volumes:
@@ -721,6 +722,7 @@ remain omitted.
 | `VEILGATED_INTERCEPT_CA_KEY` | no | `/etc/veilgate/intercept-ca.key` when present | Matching interception CA key PEM |
 | `VEILGATED_PROXY_CERT` | no | `/etc/veilgate/proxy.crt` | HTTPS proxy server certificate PEM |
 | `VEILGATED_PROXY_KEY` | no | `/etc/veilgate/proxy.key` | Matching HTTPS proxy server private key PEM |
+| `VEILGATED_LOG_LEVEL` | no | `info` | Minimum log level: `debug`, `info`, `warn`, or `error` |
 | `VEILGATED_DEBUG_ADDR` | no | disabled | Unauthenticated diagnostics address |
 | `VEILGATED_NATS_URL` | no | disabled | NATS URL for flow audit events |
 | `VEILGATED_NATS_CERT/KEY/CA` | no | workload material | NATS mTLS override |

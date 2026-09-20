@@ -58,6 +58,8 @@
 //	                            when that file or its key is present.
 //	VEILGATED_INTERCEPT_CA_KEY  Matching interception CA private key PEM (default
 //	                            "/etc/veilgate/intercept-ca.key" when present).
+//	VEILGATED_LOG_LEVEL         Minimum log level: debug, info, warn, or error
+//	                            (default "info").
 //	VEILGATED_DEBUG_ADDR        Optional plaintext diagnostics address. Never expose
 //	                            publicly; it serves unauthenticated profiling.
 //	VEILGATED_NATS_URL          Optional NATS URL for durable audit publication.
@@ -72,6 +74,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -143,6 +146,9 @@ func serveCmd() *cobra.Command {
 func runServe(ctx context.Context) error {
 	rt := cli.App{Name: appName, EnvPrefix: "VEILGATED"}.Setup(ctx)
 	defer rt.Shutdown()
+	if err := configureLogLevel(rt.LogLevel, os.Getenv("VEILGATED_LOG_LEVEL")); err != nil {
+		return err
+	}
 
 	policyPath := envutil.Or("VEILGATED_CLIENTS_FILE", defaultClientsFile)
 	policy, err := config.Load(policyPath)
@@ -402,6 +408,22 @@ func runServe(ctx context.Context) error {
 		run.HTTPServer(proxyServer, 10*time.Second, true),
 		run.HTTPServer(consoleServer, 10*time.Second, true),
 	)
+}
+
+func configureLogLevel(level *slog.LevelVar, raw string) error {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "info":
+		level.Set(slog.LevelInfo)
+	case "debug":
+		level.Set(slog.LevelDebug)
+	case "warn", "warning":
+		level.Set(slog.LevelWarn)
+	case "error":
+		level.Set(slog.LevelError)
+	default:
+		return fmt.Errorf("VEILGATED_LOG_LEVEL must be one of debug, info, warn, or error")
+	}
+	return nil
 }
 
 func optionalPolicyFile(envName, fallback, collection string) string {

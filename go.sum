@@ -1,5 +1,5 @@
-github.com/abagile/tokyo3-base v0.7.6 h1:t7x27A4T/DoZPzP/wTjKAGD6urvUi7PrRFwxBCZKkq8=
-github.com/abagile/tokyo3-base v0.7.6/go.mod h1:s93PDF0sskQIRGhIkAyol55Sdq+Xs+3TJQk1uSCRt/Q=
+github.com/abagile/tokyo3-base v0.8.0 h1:nz98AaCq40NiqZIohkXhaOCCxsM5ASWhR1chFjBxF9w=
+github.com/abagile/tokyo3-base v0.8.0/go.mod h1:8K1qJCJCa/0nne9u1WO408e2L/lZ1CqU3yy0/InuC88=
 github.com/andybalholm/brotli v1.2.2 h1:HzTuoo2ErYQqf5qvcJInB8uvqSVxRttzkFexPWtnceM=
 github.com/andybalholm/brotli v1.2.2/go.mod h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=
 github.com/cpuguy83/go-md2man/v2 v2.0.6/go.mod h1:oOW0eioCTA6cOiMLiUPZOpcVxMig6NIQQ7OS05n1F4g=

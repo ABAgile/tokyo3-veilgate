@@ -1,9 +1,9 @@
 module github.com/abagile/veilgate
 
-go 1.26.8
+go 1.27
 
 require (
-	github.com/abagile/tokyo3-base v0.7.6
+	github.com/abagile/tokyo3-base v0.8.0
 	github.com/andybalholm/brotli v1.2.2
 	github.com/klauspost/compress v1.20.0
 	github.com/spf13/cobra v1.10.2

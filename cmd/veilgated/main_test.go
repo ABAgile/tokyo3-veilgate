@@ -2,11 +2,38 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestConfigureLogLevel(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		raw  string
+		want slog.Level
+		err  bool
+	}{
+		{name: "unset", raw: "", want: slog.LevelInfo},
+		{name: "debug", raw: "debug", want: slog.LevelDebug},
+		{name: "info", raw: "INFO", want: slog.LevelInfo},
+		{name: "warning", raw: " warning ", want: slog.LevelWarn},
+		{name: "error", raw: "error", want: slog.LevelError},
+		{name: "invalid", raw: "trace", want: slog.LevelInfo, err: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			level := new(slog.LevelVar)
+			if err := configureLogLevel(level, test.raw); (err != nil) != test.err {
+				t.Fatalf("configureLogLevel() error = %v, wantErr %v", err, test.err)
+			}
+			if got := level.Level(); got != test.want {
+				t.Fatalf("configureLogLevel() level = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
 
 func TestIsLoopbackConsoleAddr(t *testing.T) {
 	tests := []struct {
@@ -109,7 +136,7 @@ func TestRunServeValidatesConfigurationBeforeStarting(t *testing.T) {
 	variableNames := []string{
 		"VEILGATED_FLOW_RETENTION", "VEILGATED_DIAL_TIMEOUT", "VEILGATED_SESSION_IDLE_TIMEOUT",
 		"VEILGATED_SESSION_MAX_DURATION", "VEILGATED_UPSTREAM_RESPONSE_HEADER_TIMEOUT",
-		"VEILGATED_CAPTURE_LIMIT_BYTES", "VEILGATED_MEDIATION_LIMIT_BYTES",
+		"VEILGATED_CAPTURE_LIMIT_BYTES", "VEILGATED_MEDIATION_LIMIT_BYTES", "VEILGATED_LOG_LEVEL",
 		"VEILGATED_RECORD_QUEUE_CAPACITY", "VEILGATED_RECORD_WORKERS",
 		"VEILGATED_CONSOLE_ADDR", "VEILGATED_CONSOLE_USERNAME", "VEILGATED_CONSOLE_PASSWORD",
 		"VEILGATED_PROXY_CERT", "VEILGATED_PROXY_KEY",
