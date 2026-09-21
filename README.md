@@ -655,10 +655,12 @@ HTTPS_PROXY=https://agent-dev:YOUR_TOKEN@veilgated-proxy:8080 \
   curl https://api.openai.com/
 ```
 
-Proxy credentials identify the sandbox; they are removed before forwarding and
-never captured. Proxy environment variables alone are not an isolation
-boundary. A sandbox deployment must block direct egress and access to other
-clients' proxy endpoints.
+Unauthenticated proxy requests advertise both `Bearer` and `Basic`
+`Proxy-Authenticate` challenges using realm `veilgate`; clients may select the
+scheme they support. Proxy credentials identify the sandbox; they are removed
+before forwarding and never captured. Proxy environment variables alone are not
+an isolation boundary. A sandbox deployment must block direct egress and access
+to other clients' proxy endpoints.
 
 ### Capture security
 

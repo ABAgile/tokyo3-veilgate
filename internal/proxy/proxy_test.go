@@ -347,8 +347,9 @@ func TestProxyRequiresAuthenticationBeforePolicy(t *testing.T) {
 	if rec.Code != http.StatusProxyAuthRequired {
 		t.Fatalf("status = %d", rec.Code)
 	}
-	if got := rec.Header().Get("Proxy-Authenticate"); !strings.Contains(got, "Bearer") {
-		t.Fatalf("Proxy-Authenticate = %q", got)
+	challenges := rec.Header().Values("Proxy-Authenticate")
+	if len(challenges) != 2 || challenges[0] != `Bearer realm="veilgate"` || challenges[1] != `Basic realm="veilgate"` {
+		t.Fatalf("Proxy-Authenticate = %#v", challenges)
 	}
 }
 

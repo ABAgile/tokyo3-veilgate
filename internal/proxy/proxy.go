@@ -285,6 +285,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.Trace("proxy-authentication", "fail", "credential rejected")
 		f.Reason = "proxy authentication required"
 		w.Header().Set("Proxy-Authenticate", `Bearer realm="veilgate"`)
+		w.Header().Add("Proxy-Authenticate", `Basic realm="veilgate"`)
 		http.Error(w, f.Reason, http.StatusProxyAuthRequired)
 		return
 	}
