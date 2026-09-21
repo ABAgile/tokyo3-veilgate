@@ -57,6 +57,40 @@ func TestGenerateLoadAndIssue(t *testing.T) {
 	}
 }
 
+func TestTLSConfigRenewsLeafAtHandshakeTime(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "ca.crt")
+	keyPath := filepath.Join(dir, "ca.key")
+	if err := Generate(certPath, keyPath); err != nil {
+		t.Fatal(err)
+	}
+	authority, err := Load(certPath, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Now()
+	authority.now = func() time.Time { return clock }
+	cfg, err := authority.TLSConfig("api.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := cfg.GetCertificate(&tls.ClientHelloInfo{ServerName: "api.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock = clock.Add(leafLifetime - 4*time.Minute)
+	second, err := cfg.GetCertificate(&tls.ClientHelloInfo{ServerName: "api.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(first.Certificate[0], second.Certificate[0]) {
+		t.Fatal("TLS config continued serving the stale leaf")
+	}
+	if !second.Leaf.NotAfter.After(clock.Add(leafLifetime - time.Minute)) {
+		t.Fatalf("renewed leaf expires at %v, too soon for clock %v", second.Leaf.NotAfter, clock)
+	}
+}
+
 func TestGenerateProxyCertificate(t *testing.T) {
 	dir := t.TempDir()
 	caCertPath := filepath.Join(dir, "ca.crt")

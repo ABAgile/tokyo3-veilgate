@@ -138,8 +138,7 @@ func parsePrivateKey(der []byte) (crypto.Signer, error) {
 // the approved CONNECT hostname and advertises HTTP/2 and HTTP/1.1 mediation.
 func (a *Authority) TLSConfig(host string) (*tls.Config, error) {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
-	certificate, err := a.certificateFor(host)
-	if err != nil {
+	if _, err := a.certificateFor(host); err != nil {
 		return nil, err
 	}
 	return &tls.Config{
@@ -150,7 +149,10 @@ func (a *Authority) TLSConfig(host string) (*tls.Config, error) {
 			if serverName == "" || serverName != host {
 				return nil, fmt.Errorf("TLS SNI %q does not match CONNECT host %q", serverName, host)
 			}
-			return certificate, nil
+			// Resolve the cached certificate at handshake time. A TLS config can
+			// outlive its first leaf, and an already-created config must not keep
+			// serving that expired certificate on a later handshake.
+			return a.certificateFor(host)
 		},
 	}, nil
 }
