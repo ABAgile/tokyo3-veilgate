@@ -16,7 +16,8 @@ The current development stage provides a deliberately narrow security baseline:
   fallback when no interception CA is configured;
 - explicit per-CONNECT HTTP/2 stream caps sized against the mediation limit;
 - lifecycle-scoped bearer or Basic proxy credentials;
-- per-client hostname and port allowlists;
+- per-client hostname and port allowlists, with optional intercept-listed-only
+  mode that keeps all other hosts opaque;
 - DNS resolution followed by public-address validation and IP-pinned dialing;
 - bounded host/IP/port-keyed persistent upstream transports with HTTP/2
   multiplexing and HTTP/1.1 keep-alive;
@@ -292,6 +293,32 @@ TLS interception is enabled. Authentication, public-DNS/IP checks, timeouts,
 byte accounting, and audit recording still apply, but TLS application contents,
 secret substitution, and application-data captures are unavailable for that session.
 
+By default every other allowed host is intercepted (`"intercept_mode": "all"`).
+Setting `"intercept_mode": "listed"` inverts that: allowed hosts stay opaque
+tunnels unless they are in `intercept_hosts` (same pattern syntax) or a secret
+or OAuth broker is scoped to the client for that host (static secret
+`allowed_hosts`, OAuth `issuer_host` and `api_hosts`). `opaque_hosts` still wins
+over any interception match. This keeps package registries, downloads, and other
+bulk traffic out of the body-buffering path while model APIs and credential
+endpoints remain mediated:
+
+```json
+{
+  "name": "agent-dev",
+  "token": "a-long-random-lifecycle-scoped-token",
+  "allowed_hosts": ["api.anthropic.com", "platform.claude.com", "registry.npmjs.org"],
+  "intercept_mode": "listed",
+  "intercept_hosts": ["api.openai.com"],
+  "allowed_ports": [443]
+}
+```
+
+`intercept_hosts` is rejected unless `intercept_mode` is `listed`. Placeholders
+sent to an opaque host are never substituted, so no real credential leaves the
+daemon, but application data for opaque hosts is not inspected or captured.
+Combine `listed` with an explicit `allowed_hosts` list rather than
+`observe_all_public_hosts` when egress should be limited as well.
+
 For a short-lived broad-egress client, explicit host matching can be replaced
 with authenticated access to any valid hostname whose resolved address passes
 Veilgate's public-IP checks:
@@ -316,6 +343,60 @@ and audit recording still apply. If `allowed_hosts` is also present, it is
 redundant for this client's destination policy. This mode removes hostname
 allowlisting as an egress boundary and should be limited to isolated
 sandboxes with short retention and credentials.
+
+### Operating modes
+
+Every CONNECT request passes three independent stages, in this order:
+
+1. **Allowed** — client authentication, then `allowed_ports` and either
+   `allowed_hosts` or `observe_all_public_hosts`. A failure is `403`.
+2. **Public** — the hostname is resolved and every address must be public
+   (no private or special-use ranges); the connection is dialed to that
+   resolved address. This applies to every client and mode.
+3. **Handling** — an allowed, public destination is either intercepted or kept
+   as an opaque tunnel. Only this stage is affected by `opaque_hosts`,
+   `intercept_mode`, and `intercept_hosts`.
+
+`observe_all_public_hosts` widens stage 1 to any valid hostname; it does not
+skip stage 2. Handling never grants access, so an `opaque_hosts` or
+`intercept_hosts` entry that fails stage 1 or 2 is still refused.
+
+Handling of an allowed destination by client settings (with a TLS interception
+CA configured; without one, every allowed CONNECT is an opaque tunnel):
+
+| Client settings | Not allowed or non-public | In `opaque_hosts` | In `intercept_hosts` or broker-scoped | Any other allowed host |
+| --- | --- | --- | --- | --- |
+| `allowed_hosts`, `intercept_mode` `all` (default) | `403` | opaque tunnel | intercepted | intercepted |
+| `allowed_hosts`, `intercept_mode` `listed` | `403` | opaque tunnel | intercepted | opaque tunnel |
+| `observe_all_public_hosts`, `all` | `403` only for non-public or disallowed port | opaque tunnel | intercepted | intercepted |
+| `observe_all_public_hosts`, `listed` | `403` only for non-public or disallowed port | opaque tunnel | intercepted | opaque tunnel |
+
+"Broker-scoped" means a static secret `allowed_hosts` entry, or an OAuth
+`issuer_host` or `api_hosts` entry, that names the client. `opaque_hosts` wins
+over the other two columns. `intercept_hosts` is only valid with `listed`.
+
+What each handling mode provides:
+
+| Capability | Opaque tunnel | Intercepted |
+| --- | --- | --- |
+| Proxy authentication, port check, public-IP check, IP-pinned dial | yes | yes |
+| Timeouts, byte accounting, flow and audit record | yes | yes |
+| Recorded fields | client, host, port, destination IP, bytes, duration, outcome, policy trace | the same, plus method, path, status, protocols, and capture |
+| Request and response headers and bodies, captures | no | yes |
+| Secret and OAuth substitution and scrubbing | no; placeholders pass through unchanged | yes |
+| Mediation limit, body buffering, HTTP/2 stream cap | not applied | applied |
+| Client must trust the interception CA | no | yes |
+| Verifies the TLS server name inside the tunnel | no | yes; SNI must match the CONNECT host |
+
+Choosing a mode:
+
+| Goal | Settings |
+| --- | --- |
+| Inspect and mediate everything the sandbox sends | `observe_all_public_hosts` (or a broad `allowed_hosts`), `intercept_mode` `all` |
+| Mediate model and credential endpoints only; leave bulk traffic alone | `allowed_hosts`, `intercept_mode` `listed` |
+| Same, with open egress that is only metered | `observe_all_public_hosts`, `intercept_mode` `listed` |
+| Exempt a few heavy hosts from `all` mode | `intercept_mode` `all`, those hosts in `opaque_hosts` |
+| Metadata-only audit, no interception | omit the interception CA (secret and OAuth brokers then refuse to start) |
 
 ### Secret substitution
 

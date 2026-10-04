@@ -21,12 +21,25 @@ type File struct {
 	Clients []Client `json:"clients"`
 }
 
+// Interception modes for HTTPS CONNECT destinations.
+const (
+	// InterceptAll terminates TLS for every allowed host not listed in
+	// OpaqueHosts. It is the default.
+	InterceptAll = "all"
+	// InterceptListed keeps every allowed host an opaque tunnel except hosts
+	// listed in InterceptHosts or scoped to the client by a secret or OAuth
+	// broker.
+	InterceptListed = "listed"
+)
+
 // Client binds one proxy credential to an identity and destination policy.
 type Client struct {
 	Name                  string   `json:"name"`
 	Token                 string   `json:"token"`
 	AllowedHosts          []string `json:"allowed_hosts,omitempty"`
 	OpaqueHosts           []string `json:"opaque_hosts,omitempty"`
+	InterceptMode         string   `json:"intercept_mode,omitempty"`
+	InterceptHosts        []string `json:"intercept_hosts,omitempty"`
 	AllowedPorts          []int    `json:"allowed_ports,omitempty"`
 	ObserveAllPublicHosts bool     `json:"observe_all_public_hosts,omitempty"`
 }
@@ -99,6 +112,23 @@ func (f *File) Validate() error {
 			}
 			c.OpaqueHosts[j] = normalized
 		}
+		switch c.InterceptMode {
+		case "":
+			c.InterceptMode = InterceptAll
+		case InterceptAll, InterceptListed:
+		default:
+			return fmt.Errorf("client %q intercept_mode must be %q or %q", c.Name, InterceptAll, InterceptListed)
+		}
+		if c.InterceptMode != InterceptListed && len(c.InterceptHosts) > 0 {
+			return fmt.Errorf("client %q intercept_hosts requires intercept_mode %q", c.Name, InterceptListed)
+		}
+		for j, pattern := range c.InterceptHosts {
+			normalized, err := normalizePattern(pattern)
+			if err != nil {
+				return fmt.Errorf("client %q intercept_hosts[%d]: %w", c.Name, j, err)
+			}
+			c.InterceptHosts[j] = normalized
+		}
 		if len(c.AllowedPorts) == 0 {
 			c.AllowedPorts = []int{443}
 		}
@@ -166,6 +196,19 @@ func (c *Client) Allows(host string, port int) bool {
 		return true
 	}
 	return hostpattern.Matches(c.AllowedHosts, host)
+}
+
+// InterceptsListedOnly reports whether destinations stay opaque tunnels unless
+// explicitly selected for interception.
+func (c *Client) InterceptsListedOnly() bool {
+	return c.InterceptMode == InterceptListed
+}
+
+// InterceptsListedHost reports whether host matches InterceptHosts. Like
+// OpaqueHosts, it does not grant destination access.
+func (c *Client) InterceptsListedHost(host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	return validHostname(host) && hostpattern.Matches(c.InterceptHosts, host)
 }
 
 // UsesOpaqueTunnel reports whether an allowed destination should remain an

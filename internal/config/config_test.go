@@ -199,3 +199,56 @@ func TestValidateRejectsUnsafeConfiguration(t *testing.T) {
 		})
 	}
 }
+
+func TestInterceptModeValidation(t *testing.T) {
+	base := func(mode string, hosts ...string) File {
+		return File{Clients: []Client{{
+			Name: "a", Token: "012345678901234567890123", AllowedHosts: []string{"example.com"},
+			InterceptMode: mode, InterceptHosts: hosts,
+		}}}
+	}
+	for _, test := range []struct {
+		name    string
+		file    File
+		wantErr bool
+	}{
+		{"default is all", base(""), false},
+		{"explicit all", base(InterceptAll), false},
+		{"listed with hosts", base(InterceptListed, "API.Example.com."), false},
+		{"unknown mode", base("some"), true},
+		{"hosts require listed", base(InterceptAll, "api.example.com"), true},
+		{"hosts require listed when mode unset", base("", "api.example.com"), true},
+		{"invalid pattern", base(InterceptListed, "api.*.example.com"), true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.file.Validate()
+			if (err != nil) != test.wantErr {
+				t.Fatalf("Validate() error = %v, wantErr %v", err, test.wantErr)
+			}
+		})
+	}
+
+	file := base(InterceptListed, "API.Example.com.", "*.Models.example")
+	if err := file.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	client := &file.Clients[0]
+	if !client.InterceptsListedOnly() {
+		t.Fatal("expected listed-only mode")
+	}
+	for host, want := range map[string]bool{
+		"api.example.com":  true,
+		"API.EXAMPLE.COM.": true,
+		"x.models.example": true,
+		"models.example":   false,
+		"other.example":    false,
+	} {
+		if got := client.InterceptsListedHost(host); got != want {
+			t.Errorf("InterceptsListedHost(%q) = %v, want %v", host, got, want)
+		}
+	}
+	def := base("")
+	if err := def.Validate(); err != nil || def.Clients[0].InterceptsListedOnly() {
+		t.Fatalf("default mode must intercept all, err = %v", err)
+	}
+}

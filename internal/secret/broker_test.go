@@ -249,3 +249,24 @@ func TestNewRejectsMissingHostValue(t *testing.T) {
 		t.Fatal("New succeeded")
 	}
 }
+
+func TestScopesHost(t *testing.T) {
+	broker := testBroker(t)
+	for _, test := range []struct {
+		client, host string
+		want         bool
+	}{
+		{"agent", "api.example.com", true},
+		{"agent", "API.EXAMPLE.COM.", true},
+		{"agent", "other.example.com", false},
+		{"other", "api.example.com", false},
+	} {
+		if got := broker.ScopesHost(test.client, test.host); got != test.want {
+			t.Errorf("ScopesHost(%q, %q) = %v, want %v", test.client, test.host, got, test.want)
+		}
+	}
+	var none *Broker
+	if none.ScopesHost("agent", "api.example.com") {
+		t.Fatal("nil broker must scope no host")
+	}
+}

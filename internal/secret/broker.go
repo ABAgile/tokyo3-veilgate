@@ -289,6 +289,19 @@ func validName(name string) bool {
 	return true
 }
 
+// ScopesHost reports whether any secret is scoped to client and host.
+func (b *Broker) ScopesHost(client, host string) bool {
+	if b == nil {
+		return false
+	}
+	for _, item := range b.secrets {
+		if slices.Contains(item.Clients, client) && matchesHost(item.AllowedHosts, host) {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizePattern(pattern string) (string, error) {
 	return hostpattern.Normalize(pattern)
 }

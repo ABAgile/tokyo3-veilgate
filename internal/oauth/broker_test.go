@@ -554,3 +554,23 @@ func TestOAuthPolicyRejectsUnsafeDefinitions(t *testing.T) {
 		}
 	}
 }
+
+func TestScopesHost(t *testing.T) {
+	broker, err := New(testOAuthFile(), filepath.Join(t.TempDir(), "auth.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		client, host string
+		want         bool
+	}{
+		{"agent", "login.example.com", true},
+		{"agent", "API.EXAMPLE.COM.", true},
+		{"agent", "other.example.com", false},
+		{"other", "api.example.com", false},
+	} {
+		if got := broker.ScopesHost(test.client, test.host); got != test.want {
+			t.Errorf("ScopesHost(%q, %q) = %v, want %v", test.client, test.host, got, test.want)
+		}
+	}
+}

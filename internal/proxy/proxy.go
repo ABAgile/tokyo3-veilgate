@@ -71,6 +71,13 @@ type SecretBroker interface {
 	PlaceholderNames([]byte) []string
 }
 
+// hostScoper is implemented by brokers that act only on configured hosts. It
+// lets a client in intercept_mode "listed" mediate exactly the destinations a
+// broker needs to see.
+type hostScoper interface {
+	ScopesHost(client, host string) bool
+}
+
 // OAuthBroker virtualizes configured OAuth token responses and implements the
 // SecretBroker contract for subsequent virtual-token requests.
 type OAuthBroker interface {
@@ -173,6 +180,14 @@ func (c brokerChain) Sanitize(data []byte) []byte {
 func (c brokerChain) ContainsPlaceholder(data []byte) bool {
 	for _, broker := range c.brokers {
 		if broker.ContainsPlaceholder(data) {
+			return true
+		}
+	}
+	return false
+}
+func (c brokerChain) ScopesHost(client, host string) bool {
+	for _, broker := range c.brokers {
+		if scoper, ok := broker.(hostScoper); ok && scoper.ScopesHost(client, host) {
 			return true
 		}
 	}
@@ -332,7 +347,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.Decision = "allowed"
 
 	if r.Method == http.MethodConnect {
-		opaque := client.UsesOpaqueTunnel(host)
+		opaque := h.usesOpaqueTunnel(client, host)
 		if h.Interceptor != nil && !opaque {
 			f.Mode = "intercepted-session"
 			f.Trace("tls-mediation", "pass", "HTTP/2 or HTTP/1.1 interception selected")
@@ -375,6 +390,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	} else {
 		f.Trace("upstream", "pass", "response received")
 	}
+}
+
+// usesOpaqueTunnel reports whether an allowed CONNECT destination stays an
+// opaque TCP tunnel. opaque_hosts always wins. In intercept_mode "listed",
+// everything else is opaque unless it is in intercept_hosts or a broker is
+// scoped to the client for that host.
+func (h *Handler) usesOpaqueTunnel(client *config.Client, host string) bool {
+	if client.UsesOpaqueTunnel(host) {
+		return true
+	}
+	if !client.InterceptsListedOnly() || client.InterceptsListedHost(host) {
+		return false
+	}
+	scoper, ok := h.Secrets.(hostScoper)
+	return !ok || !scoper.ScopesHost(client.Name, host)
 }
 
 func (h *Handler) recordFlow(item flow.Flow) {

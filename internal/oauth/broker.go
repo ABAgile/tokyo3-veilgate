@@ -522,6 +522,23 @@ func (b *Broker) PlaceholderNames(data []byte) []string {
 	return sortedNames(used)
 }
 
+// ScopesHost reports whether host is a token endpoint or API host of any
+// broker definition that serves client.
+func (b *Broker) ScopesHost(client, host string) bool {
+	if b == nil {
+		return false
+	}
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for _, definition := range b.defs {
+		if slices.Contains(definition.Clients, client) && (definition.IssuerHost == host || matchesHost(definition.APIHosts, host)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (b *Broker) issuerHost(host string) bool {
 	if b == nil {
 		return false
