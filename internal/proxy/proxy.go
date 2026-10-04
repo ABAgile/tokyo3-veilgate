@@ -1220,8 +1220,8 @@ func newSessionID() (string, error) {
 }
 
 func destinationPolicyDetail(client *config.Client) string {
-	if client.ObserveAllPublicHosts {
-		return "all-public-host observation policy allowed destination"
+	if client.AllowAnyPublicHost {
+		return "any-public-host policy allowed destination"
 	}
 	return "client allowlist allowed destination"
 }

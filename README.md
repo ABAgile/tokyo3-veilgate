@@ -287,7 +287,7 @@ rejected. When `allowed_ports` is omitted it defaults to `[443]`.
 
 `opaque_hosts` uses the same exact-host and leftmost-label wildcard syntax. It
 only selects the mediation mode; a destination must still pass `allowed_hosts`
-(or `observe_all_public_hosts`) and `allowed_ports`. For HTTPS CONNECT targets
+(or `allow_any_public_host`) and `allowed_ports`. For HTTPS CONNECT targets
 listed there, Veilgate keeps the connection as an opaque TCP tunnel even when
 TLS interception is enabled. Authentication, public-DNS/IP checks, timeouts,
 byte accounting, and audit recording still apply, but TLS application contents,
@@ -317,7 +317,7 @@ endpoints remain mediated:
 sent to an opaque host are never substituted, so no real credential leaves the
 daemon, but application data for opaque hosts is not inspected or captured.
 Combine `listed` with an explicit `allowed_hosts` list rather than
-`observe_all_public_hosts` when egress should be limited as well.
+`allow_any_public_host` when egress should be limited as well.
 
 For a short-lived broad-egress client, explicit host matching can be replaced
 with authenticated access to any valid hostname whose resolved address passes
@@ -328,13 +328,14 @@ Veilgate's public-IP checks:
   "clients": [{
     "name": "inspection-agent",
     "token": "a-separate-short-lived-random-token",
-    "observe_all_public_hosts": true,
+    "allow_any_public_host": true,
     "allowed_ports": [443]
   }]
 }
 ```
 
-`observe_all_public_hosts` does not permit direct IP targets,
+`observe_all_public_hosts` is a deprecated alias for `allow_any_public_host` and
+is still accepted. `allow_any_public_host` does not permit direct IP targets,
 private/special-use addresses, or ports outside `allowed_ports`. With TLS
 interception enabled, it also permits HTTPS content inspection; without
 interception, HTTPS CONNECT sessions remain opaque TCP tunnels while
@@ -349,7 +350,7 @@ sandboxes with short retention and credentials.
 Every CONNECT request passes three independent stages, in this order:
 
 1. **Allowed** — client authentication, then `allowed_ports` and either
-   `allowed_hosts` or `observe_all_public_hosts`. A failure is `403`.
+   `allowed_hosts` or `allow_any_public_host`. A failure is `403`.
 2. **Public** — the hostname is resolved and every address must be public
    (no private or special-use ranges); the connection is dialed to that
    resolved address. This applies to every client and mode.
@@ -357,7 +358,7 @@ Every CONNECT request passes three independent stages, in this order:
    as an opaque tunnel. Only this stage is affected by `opaque_hosts`,
    `intercept_mode`, and `intercept_hosts`.
 
-`observe_all_public_hosts` widens stage 1 to any valid hostname; it does not
+`allow_any_public_host` widens stage 1 to any valid hostname; it does not
 skip stage 2. Handling never grants access, so an `opaque_hosts` or
 `intercept_hosts` entry that fails stage 1 or 2 is still refused.
 
@@ -368,8 +369,8 @@ CA configured; without one, every allowed CONNECT is an opaque tunnel):
 | --- | --- | --- | --- | --- |
 | `allowed_hosts`, `intercept_mode` `all` (default) | `403` | opaque tunnel | intercepted | intercepted |
 | `allowed_hosts`, `intercept_mode` `listed` | `403` | opaque tunnel | intercepted | opaque tunnel |
-| `observe_all_public_hosts`, `all` | `403` only for non-public or disallowed port | opaque tunnel | intercepted | intercepted |
-| `observe_all_public_hosts`, `listed` | `403` only for non-public or disallowed port | opaque tunnel | intercepted | opaque tunnel |
+| `allow_any_public_host`, `all` | `403` only for non-public or disallowed port | opaque tunnel | intercepted | intercepted |
+| `allow_any_public_host`, `listed` | `403` only for non-public or disallowed port | opaque tunnel | intercepted | opaque tunnel |
 
 "Broker-scoped" means a static secret `allowed_hosts` entry, or an OAuth
 `issuer_host` or `api_hosts` entry, that names the client. `opaque_hosts` wins
@@ -405,9 +406,9 @@ Choosing a mode:
 
 | Goal | Settings |
 | --- | --- |
-| Inspect and mediate everything the sandbox sends | `observe_all_public_hosts` (or a broad `allowed_hosts`), `intercept_mode` `all` |
+| Inspect and mediate everything the sandbox sends | `allow_any_public_host` (or a broad `allowed_hosts`), `intercept_mode` `all` |
 | Mediate model and credential endpoints only; leave bulk traffic alone | `allowed_hosts`, `intercept_mode` `listed` |
-| Same, with open egress that is only metered | `observe_all_public_hosts`, `intercept_mode` `listed` |
+| Same, with open egress that is only metered | `allow_any_public_host`, `intercept_mode` `listed` |
 | Exempt a few heavy hosts from `all` mode | `intercept_mode` `all`, those hosts in `opaque_hosts` |
 | Metadata-only audit, no interception | omit the interception CA (secret and OAuth brokers then refuse to start) |
 
@@ -448,7 +449,7 @@ and binary messages, plaintext HTTP). A body headed to a host where no secret is
 scoped to the client is not parsed, and placeholders of secrets scoped
 elsewhere are inert text there. Secret definitions retain their
 independent `clients` and `allowed_hosts` checks when a client enables
-`observe_all_public_hosts`; broad destination observation never broadens a
+`allow_any_public_host`; broad destination access never broadens a
 secret's authorized hosts.
 
 Resolved secret values must be 8–16384 bytes so response matching remains

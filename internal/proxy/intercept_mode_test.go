@@ -23,7 +23,7 @@ func TestUsesOpaqueTunnelByInterceptMode(t *testing.T) {
 
 	newClient := func(mode string, intercept, opaque []string) *config.Client {
 		policy := &config.File{Clients: []config.Client{{
-			Name: "agent", Token: "012345678901234567890123", ObserveAllPublicHosts: true,
+			Name: "agent", Token: "012345678901234567890123", AllowAnyPublicHost: true,
 			InterceptMode: mode, InterceptHosts: intercept, OpaqueHosts: opaque,
 		}}}
 		if err := policy.Validate(); err != nil {

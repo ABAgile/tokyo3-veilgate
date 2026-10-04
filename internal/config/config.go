@@ -34,14 +34,18 @@ const (
 
 // Client binds one proxy credential to an identity and destination policy.
 type Client struct {
-	Name                  string   `json:"name"`
-	Token                 string   `json:"token"`
-	AllowedHosts          []string `json:"allowed_hosts,omitempty"`
-	OpaqueHosts           []string `json:"opaque_hosts,omitempty"`
-	InterceptMode         string   `json:"intercept_mode,omitempty"`
-	InterceptHosts        []string `json:"intercept_hosts,omitempty"`
-	AllowedPorts          []int    `json:"allowed_ports,omitempty"`
-	ObserveAllPublicHosts bool     `json:"observe_all_public_hosts,omitempty"`
+	Name               string   `json:"name"`
+	Token              string   `json:"token"`
+	AllowedHosts       []string `json:"allowed_hosts,omitempty"`
+	OpaqueHosts        []string `json:"opaque_hosts,omitempty"`
+	InterceptMode      string   `json:"intercept_mode,omitempty"`
+	InterceptHosts     []string `json:"intercept_hosts,omitempty"`
+	AllowedPorts       []int    `json:"allowed_ports,omitempty"`
+	AllowAnyPublicHost bool     `json:"allow_any_public_host,omitempty"`
+	// ObserveAllPublicHosts is the deprecated name of AllowAnyPublicHost.
+	// Validate folds it into AllowAnyPublicHost, so only that field is
+	// consulted afterwards.
+	ObserveAllPublicHosts bool `json:"observe_all_public_hosts,omitempty"`
 }
 
 // Load reads and validates a client policy file.
@@ -95,8 +99,11 @@ func (f *File) Validate() error {
 			return fmt.Errorf("clients %q and %q share the same token", owner, c.Name)
 		}
 		tokens[digest] = c.Name
-		if len(c.AllowedHosts) == 0 && !c.ObserveAllPublicHosts {
-			return fmt.Errorf("client %q must allow at least one host or enable observe_all_public_hosts", c.Name)
+		if c.ObserveAllPublicHosts {
+			c.AllowAnyPublicHost, c.ObserveAllPublicHosts = true, false
+		}
+		if len(c.AllowedHosts) == 0 && !c.AllowAnyPublicHost {
+			return fmt.Errorf("client %q must allow at least one host or enable allow_any_public_host", c.Name)
 		}
 		for j, pattern := range c.AllowedHosts {
 			normalized, err := normalizePattern(pattern)
@@ -172,27 +179,27 @@ func (f *File) Authenticate(token string) (*Client, bool) {
 	return match, true
 }
 
-// HasObservationClients reports whether any identity permits all public hosts.
-// The mode is usable with or without TLS interception; callers may use this
-// to describe policy scope without implying application-data visibility.
-func (f *File) HasObservationClients() bool {
+// HasAnyPublicHostClients reports whether any identity permits all public
+// hosts. The mode is usable with or without TLS interception; callers may use
+// this to describe policy scope without implying application-data visibility.
+func (f *File) HasAnyPublicHostClients() bool {
 	for _, client := range f.Clients {
-		if client.ObserveAllPublicHosts {
+		if client.AllowAnyPublicHost {
 			return true
 		}
 	}
 	return false
 }
 
-// Allows reports whether client may connect to host:port. Observation clients
-// accept any syntactically valid hostname here; the proxy's resolver still
+// Allows reports whether client may connect to host:port. Clients with
+// AllowAnyPublicHost accept any syntactically valid hostname here; the proxy's resolver still
 // requires every selected destination address to be public.
 func (c *Client) Allows(host string, port int) bool {
 	host = strings.ToLower(strings.TrimSuffix(host, "."))
 	if !validHostname(host) || net.ParseIP(host) != nil || !slices.Contains(c.AllowedPorts, port) {
 		return false
 	}
-	if c.ObserveAllPublicHosts {
+	if c.AllowAnyPublicHost {
 		return true
 	}
 	return hostpattern.Matches(c.AllowedHosts, host)

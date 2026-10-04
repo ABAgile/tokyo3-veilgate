@@ -403,7 +403,7 @@ func runServe(ctx context.Context) error {
 	if consoleUser == "" {
 		rt.Log.Warn("console running unauthenticated", "console_addr", consoleAddr, "reason", "loopback listen address")
 	}
-	rt.Log.Info("veilgate starting", "proxy_addr", proxyAddr, "console_addr", consoleAddr, "clients", len(policy.Clients), "observation_clients", observationClientCount(policy))
+	rt.Log.Info("veilgate starting", "proxy_addr", proxyAddr, "console_addr", consoleAddr, "clients", len(policy.Clients), "any_public_host_clients", anyPublicHostClientCount(policy))
 	return run.Group(rt.Ctx,
 		run.HTTPServer(proxyServer, 10*time.Second, true),
 		run.HTTPServer(consoleServer, 10*time.Second, true),
@@ -493,10 +493,10 @@ func isLoopbackConsoleAddr(addr string) bool {
 	return err == nil && parsed.Unmap().IsLoopback()
 }
 
-func observationClientCount(policy *config.File) int {
+func anyPublicHostClientCount(policy *config.File) int {
 	count := 0
 	for _, client := range policy.Clients {
-		if client.ObserveAllPublicHosts {
+		if client.AllowAnyPublicHost {
 			count++
 		}
 	}

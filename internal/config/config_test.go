@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,17 +75,17 @@ func TestClientUsesOpaqueTunnelForConfiguredHosts(t *testing.T) {
 	}
 }
 
-func TestClientObservesAnyValidHostOnAllowedPorts(t *testing.T) {
+func TestClientAllowsAnyPublicHostOnAllowedPorts(t *testing.T) {
 	f := &File{Clients: []Client{{
-		Name: "observer", Token: "012345678901234567890123",
-		ObserveAllPublicHosts: true,
+		Name: "any-host", Token: "012345678901234567890123",
+		AllowAnyPublicHost: true,
 	}}}
 	if err := f.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	client := &f.Clients[0]
-	if !f.HasObservationClients() || !client.Allows("arbitrary.example", 443) {
-		t.Fatal("observation policy did not allow a valid hostname on the default port")
+	if !f.HasAnyPublicHostClients() || !client.Allows("arbitrary.example", 443) {
+		t.Fatal("any-public-host policy did not allow a valid hostname on the default port")
 	}
 	for _, target := range []struct {
 		host string
@@ -123,7 +124,7 @@ func TestValidateRejectsSharedTokenNamesBothClients(t *testing.T) {
 	const shared = "012345678901234567890123"
 	f := &File{Clients: []Client{
 		{Name: "low", Token: shared, AllowedHosts: []string{"example.com"}},
-		{Name: "high", Token: shared, ObserveAllPublicHosts: true},
+		{Name: "high", Token: shared, AllowAnyPublicHost: true},
 	}}
 	err := f.Validate()
 	if err == nil {
@@ -146,7 +147,7 @@ func TestAuthenticateRefusesAmbiguousToken(t *testing.T) {
 	const shared = "012345678901234567890123"
 	unvalidated := &File{Clients: []Client{
 		{Name: "low", Token: shared, AllowedHosts: []string{"example.com"}, AllowedPorts: []int{443}},
-		{Name: "high", Token: shared, ObserveAllPublicHosts: true, AllowedPorts: []int{443}},
+		{Name: "high", Token: shared, AllowAnyPublicHost: true, AllowedPorts: []int{443}},
 	}}
 	if client, ok := unvalidated.Authenticate(shared); ok {
 		t.Fatalf("Authenticate(ambiguous) = %q, want refusal", client.Name)
@@ -189,7 +190,7 @@ func TestValidateRejectsUnsafeConfiguration(t *testing.T) {
 		{"unicode", File{Clients: []Client{{Name: "a", Token: "012345678901234567890123", AllowedHosts: []string{"éxample.com"}}}}},
 		{"duplicate token", File{Clients: []Client{
 			{Name: "low", Token: "012345678901234567890123", AllowedHosts: []string{"example.com"}},
-			{Name: "high", Token: "012345678901234567890123", ObserveAllPublicHosts: true},
+			{Name: "high", Token: "012345678901234567890123", AllowAnyPublicHost: true},
 		}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -250,5 +251,24 @@ func TestInterceptModeValidation(t *testing.T) {
 	def := base("")
 	if err := def.Validate(); err != nil || def.Clients[0].InterceptsListedOnly() {
 		t.Fatalf("default mode must intercept all, err = %v", err)
+	}
+}
+
+func TestDeprecatedObserveAllPublicHostsAliasesAllowAnyPublicHost(t *testing.T) {
+	data := `{"clients":[{"name":"old","token":"012345678901234567890123","observe_all_public_hosts":true}]}`
+	var f File
+	if err := json.Unmarshal([]byte(data), &f); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	client := &f.Clients[0]
+	if !client.AllowAnyPublicHost || client.ObserveAllPublicHosts || !client.Allows("arbitrary.example", 443) || !f.HasAnyPublicHostClients() {
+		t.Fatalf("deprecated field was not folded into allow_any_public_host: %#v", client)
+	}
+	current := File{Clients: []Client{{Name: "new", Token: "012345678901234567890123", AllowAnyPublicHost: true}}}
+	if err := current.Validate(); err != nil || !current.Clients[0].Allows("arbitrary.example", 443) {
+		t.Fatalf("allow_any_public_host not honored: %v", err)
 	}
 }
