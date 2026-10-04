@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -88,6 +89,63 @@ func TestTLSConfigRenewsLeafAtHandshakeTime(t *testing.T) {
 	}
 	if !second.Leaf.NotAfter.After(clock.Add(leafLifetime - time.Minute)) {
 		t.Fatalf("renewed leaf expires at %v, too soon for clock %v", second.Leaf.NotAfter, clock)
+	}
+}
+
+func TestLeafCacheReissuesWhenClockStepsBack(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "ca.crt")
+	keyPath := filepath.Join(dir, "ca.key")
+	if err := Generate(certPath, keyPath); err != nil {
+		t.Fatal(err)
+	}
+	authority, err := Load(certPath, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Now().Round(0)
+	authority.now = func() time.Time { return clock }
+	first, err := authority.certificateFor("api.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := authority.certificateFor("api.example.com")
+	if err != nil || !bytes.Equal(first.Certificate[0], again.Certificate[0]) {
+		t.Fatalf("expected cached leaf, err=%v", err)
+	}
+	clock = clock.Add(-time.Minute)
+	stepped, err := authority.certificateFor("api.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(first.Certificate[0], stepped.Certificate[0]) {
+		t.Fatal("cache kept a leaf issued in the future")
+	}
+}
+
+func TestLeafCacheIgnoresMonotonicClock(t *testing.T) {
+	dir := t.TempDir()
+	certPath := filepath.Join(dir, "ca.crt")
+	keyPath := filepath.Join(dir, "ca.key")
+	if err := Generate(certPath, keyPath); err != nil {
+		t.Fatal(err)
+	}
+	authority, err := Load(certPath, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// time.Now carries a monotonic reading that stops during host suspend, so
+	// cache expiry must be based on wall-clock time only.
+	authority.now = time.Now
+	if _, err := authority.certificateFor("api.example.com"); err != nil {
+		t.Fatal(err)
+	}
+	cached := authority.cache["api.example.com"]
+	if s := cached.notAfter.String(); strings.Contains(s, "m=") {
+		t.Fatalf("cached notAfter keeps monotonic reading: %s", s)
+	}
+	if s := cached.lastUsed.String(); strings.Contains(s, "m=") {
+		t.Fatalf("cached lastUsed keeps monotonic reading: %s", s)
 	}
 }
 

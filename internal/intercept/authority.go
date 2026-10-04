@@ -28,6 +28,8 @@ import (
 
 const (
 	leafLifetime             = 24 * time.Hour
+	leafClientClockSkew      = time.Hour       // leaf NotBefore is set this far in the past
+	leafRenewMargin          = 5 * time.Minute // reissue when less than this remains
 	proxyCertificateLifetime = 825 * 24 * time.Hour
 	maxCachedCertificates    = 1024
 )
@@ -46,6 +48,7 @@ func DefaultProxySANs() []string {
 
 type cachedCertificate struct {
 	certificate *tls.Certificate
+	issuedAt    time.Time
 	notAfter    time.Time
 	lastUsed    time.Time
 }
@@ -160,8 +163,14 @@ func (a *Authority) TLSConfig(host string) (*tls.Config, error) {
 func (a *Authority) certificateFor(host string) (*tls.Certificate, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	now := a.now()
-	if cached, ok := a.cache[host]; ok && now.Add(5*time.Minute).Before(cached.notAfter) {
+	// Strip the monotonic reading: it does not advance while the host is
+	// suspended, so comparing monotonic-bearing times would treat a leaf as
+	// still fresh after an overnight sleep even though its wall-clock NotAfter
+	// (what TLS clients check) has long passed.
+	now := a.now().Round(0)
+	// Also reissue if the wall clock stepped back past the issue time: the
+	// cached leaf's NotBefore could then be in the client's future.
+	if cached, ok := a.cache[host]; ok && !now.Before(cached.issuedAt) && now.Add(leafRenewMargin).Before(cached.notAfter) {
 		cached.lastUsed = now
 		a.cache[host] = cached
 		return cached.certificate, nil
@@ -174,14 +183,20 @@ func (a *Authority) certificateFor(host string) (*tls.Certificate, error) {
 	if a.certificate.NotAfter.Before(notAfter) {
 		notAfter = a.certificate.NotAfter
 	}
-	if !now.Add(5 * time.Minute).Before(notAfter) {
+	if !now.Add(leafRenewMargin).Before(notAfter) {
 		return nil, errors.New("interception CA expires too soon to issue a leaf certificate")
+	}
+	// Backdate generously so clients with clocks running behind still accept
+	// the leaf, but never before the CA itself became valid.
+	notBefore := now.Add(-leafClientClockSkew)
+	if a.certificate.NotBefore.After(notBefore) {
+		notBefore = a.certificate.NotBefore
 	}
 	template := &x509.Certificate{
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: host},
 		DNSNames:     []string{host},
-		NotBefore:    now.Add(-5 * time.Minute),
+		NotBefore:    notBefore,
 		NotAfter:     notAfter,
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
@@ -223,7 +238,7 @@ func (a *Authority) certificateFor(host string) (*tls.Certificate, error) {
 			delete(a.cache, oldestName)
 		}
 	}
-	a.cache[host] = cachedCertificate{certificate: certificate, notAfter: notAfter, lastUsed: now}
+	a.cache[host] = cachedCertificate{certificate: certificate, issuedAt: now, notAfter: notAfter, lastUsed: now}
 	return certificate, nil
 }
 
