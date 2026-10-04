@@ -52,9 +52,14 @@ func (b *Broker) SubstituteQuery(u *url.URL, client, host string, secure bool) (
 // SubstituteBody replaces exact placeholders in JSON string values or form
 // values. Embedded placeholder text in those values remains ordinary content.
 // The boolean reports whether the media type is safe for text capture.
-// Unsupported bodies containing a known placeholder fail closed.
+//
+// Only secrets scoped to client and host take part. When none is, the body is
+// returned unparsed, and a placeholder of any other secret is inert text. In
+// scope, unsupported bodies and field names containing a placeholder fail
+// closed because it cannot be substituted there.
 func (b *Broker) SubstituteBody(contentType string, body []byte, client, host string, secure bool) ([]byte, []string, bool, error) {
-	if len(body) == 0 {
+	scope := b.scopeFor(client, host)
+	if len(body) == 0 || !slices.Contains(scope, true) {
 		return body, nil, supportedMediaType(contentType), nil
 	}
 	mediaType := parseMediaType(contentType)
@@ -70,7 +75,7 @@ func (b *Broker) SubstituteBody(contentType string, body []byte, client, host st
 			return nil, nil, true, errors.New("JSON request body contains trailing data")
 		}
 		used := make(map[string]struct{})
-		transformed, err := b.transformJSON(value, client, host, secure, used)
+		transformed, err := b.transformJSON(value, scope, client, host, secure, used)
 		if err != nil {
 			return nil, nil, true, err
 		}
@@ -90,7 +95,7 @@ func (b *Broker) SubstituteBody(contentType string, body []byte, client, host st
 		}
 		used := make(map[string]struct{})
 		for name, entries := range values {
-			if b.ContainsPlaceholder([]byte(name)) {
+			if b.containsScopedPlaceholder([]byte(name), scope) {
 				return nil, nil, true, errors.New("secret placeholders are not allowed in form names")
 			}
 			for i, value := range entries {
@@ -110,7 +115,7 @@ func (b *Broker) SubstituteBody(contentType string, body []byte, client, host st
 		}
 		return []byte(values.Encode()), names, true, nil
 	default:
-		if b.ContainsPlaceholder(body) {
+		if b.containsScopedPlaceholder(body, scope) {
 			return nil, nil, false, errors.New("secret placeholder appears in an unsupported request body")
 		}
 		return body, nil, false, nil
@@ -219,23 +224,36 @@ func (b *Broker) ContainsPlaceholder(data []byte) bool {
 	return false
 }
 
-// PlaceholderNames reports the names of configured secrets whose placeholder
-// appears in data. It exposes names only, never values, so rejections can be
-// attributed in captures and audit records.
-func (b *Broker) PlaceholderNames(data []byte) []string {
+// containsScopedPlaceholder reports whether data includes the placeholder of a
+// secret marked in scope.
+func (b *Broker) containsScopedPlaceholder(data []byte, scope []bool) bool {
+	for i := range b.secrets {
+		if scope[i] && bytes.Contains(data, []byte(b.secrets[i].Placeholder)) {
+			return true
+		}
+	}
+	return false
+}
+
+// PlaceholderNamesFor reports the names of secrets scoped to client and host
+// whose placeholder appears in data. Placeholders of other secrets are inert
+// there and are not reported. It exposes names only, never values, so
+// rejections can be attributed in captures and audit records.
+func (b *Broker) PlaceholderNamesFor(data []byte, client, host string) []string {
 	if b == nil {
 		return nil
 	}
+	scope := b.scopeFor(client, host)
 	var names []string
-	for _, item := range b.secrets {
-		if bytes.Contains(data, []byte(item.Placeholder)) {
+	for i, item := range b.secrets {
+		if scope[i] && bytes.Contains(data, []byte(item.Placeholder)) {
 			names = append(names, item.Name)
 		}
 	}
 	return names
 }
 
-func (b *Broker) transformJSON(value any, client, host string, secure bool, used map[string]struct{}) (any, error) {
+func (b *Broker) transformJSON(value any, scope []bool, client, host string, secure bool, used map[string]struct{}) (any, error) {
 	switch typed := value.(type) {
 	case string:
 		replaced, item, err := b.substituteBodyValue(typed, client, host, secure)
@@ -245,7 +263,7 @@ func (b *Broker) transformJSON(value any, client, host string, secure bool, used
 		return replaced, err
 	case []any:
 		for i, child := range typed {
-			replaced, err := b.transformJSON(child, client, host, secure, used)
+			replaced, err := b.transformJSON(child, scope, client, host, secure, used)
 			if err != nil {
 				return nil, err
 			}
@@ -254,10 +272,10 @@ func (b *Broker) transformJSON(value any, client, host string, secure bool, used
 		return typed, nil
 	case map[string]any:
 		for name, child := range typed {
-			if b.ContainsPlaceholder([]byte(name)) {
+			if b.containsScopedPlaceholder([]byte(name), scope) {
 				return nil, errors.New("secret placeholders are not allowed in JSON object names")
 			}
-			replaced, err := b.transformJSON(child, client, host, secure, used)
+			replaced, err := b.transformJSON(child, scope, client, host, secure, used)
 			if err != nil {
 				return nil, err
 			}
@@ -269,18 +287,25 @@ func (b *Broker) transformJSON(value any, client, host string, secure bool, used
 	}
 }
 
+// substituteExact handles credential-bearing positions such as query values,
+// where a placeholder outside its scope is rejected.
 func (b *Broker) substituteExact(value, client, host string, secure bool) (string, *resolved, error) {
 	return b.substituteValue(value, client, host, secure, true)
 }
 
+// substituteBodyValue handles body content, where a placeholder outside its
+// scope is inert text.
 func (b *Broker) substituteBodyValue(value, client, host string, secure bool) (string, *resolved, error) {
 	return b.substituteValue(value, client, host, secure, false)
 }
 
-func (b *Broker) substituteValue(value, client, host string, secure, rejectEmbedded bool) (string, *resolved, error) {
+func (b *Broker) substituteValue(value, client, host string, secure, strict bool) (string, *resolved, error) {
 	for i := range b.secrets {
 		item := &b.secrets[i]
 		if value == item.Placeholder {
+			if !strict && (!slices.Contains(item.Clients, client) || !matchesHost(item.AllowedHosts, host)) {
+				continue
+			}
 			if !secure {
 				return value, nil, fmt.Errorf("secret %q cannot be used over plaintext HTTP", item.Name)
 			}
@@ -292,7 +317,7 @@ func (b *Broker) substituteValue(value, client, host string, secure, rejectEmbed
 			}
 			return item.value, item, nil
 		}
-		if rejectEmbedded && strings.Contains(value, item.Placeholder) {
+		if strict && strings.Contains(value, item.Placeholder) {
 			return value, nil, fmt.Errorf("secret %q placeholder must occupy the complete value", item.Name)
 		}
 	}

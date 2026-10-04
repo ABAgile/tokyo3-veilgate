@@ -292,7 +292,7 @@ func (h *Handler) relayWebSocket(ctx context.Context, direction string, src, dst
 		case wsClose, wsPing, wsPong:
 			payload := frame.payload
 			if direction == "client-to-upstream" && h.Secrets != nil {
-				if names := h.Secrets.PlaceholderNames(payload); len(names) > 0 {
+				if names := h.Secrets.PlaceholderNamesFor(payload, client, host); len(names) > 0 {
 					capture.addRequestNames(names)
 					return total, fmt.Errorf("secret placeholders are not allowed in WebSocket control frames: %s", strings.Join(names, ", "))
 				}
@@ -327,7 +327,7 @@ func (h *Handler) relayWebSocket(ctx context.Context, direction string, src, dst
 		}
 		if messageOpcode == wsBinary {
 			if direction == "client-to-upstream" && h.Secrets != nil {
-				if names := h.Secrets.PlaceholderNames(uncompressed); len(names) > 0 {
+				if names := h.Secrets.PlaceholderNamesFor(uncompressed, client, host); len(names) > 0 {
 					capture.addRequestNames(names)
 					capture.addBinaryMessage(direction, uncompressed)
 					return total, fmt.Errorf("secret placeholders are not allowed in binary WebSocket messages: %s", strings.Join(names, ", "))
@@ -352,7 +352,7 @@ func (h *Handler) relayWebSocket(ctx context.Context, direction string, src, dst
 		}
 		transformed := uncompressed
 		if direction == "client-to-upstream" {
-			if h.Secrets != nil && h.Secrets.ContainsPlaceholder(transformed) {
+			if h.Secrets != nil && len(h.Secrets.PlaceholderNamesFor(transformed, client, host)) > 0 {
 				var names []string
 				transformed, names, err = h.Secrets.SubstituteJSONMessage(transformed, client, host)
 				if err != nil {

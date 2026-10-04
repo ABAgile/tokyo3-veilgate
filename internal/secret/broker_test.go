@@ -270,3 +270,101 @@ func TestScopesHost(t *testing.T) {
 		t.Fatal("nil broker must scope no host")
 	}
 }
+
+func twoHostBroker(t *testing.T) *Broker {
+	t.Helper()
+	broker, err := New(File{Secrets: []Definition{
+		{Name: "a_key", ValueEnv: "A", Placeholder: "aaaaaaaaaaaaaaaa", Clients: []string{"agent"}, AllowedHosts: []string{"a.example.com"}},
+		{Name: "b_key", ValueEnv: "B", Placeholder: "bbbbbbbbbbbbbbbb", Clients: []string{"agent"}, AllowedHosts: []string{"b.example.com"}},
+	}}, func(name string) (string, bool) {
+		return map[string]string{"VEILGATED_A": "real-a-value", "VEILGATED_B": "real-b-value"}[name], true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return broker
+}
+
+const (
+	placeholderA = "VEILGATED_SECRET_aaaaaaaaaaaaaaaa"
+	placeholderB = "VEILGATED_SECRET_bbbbbbbbbbbbbbbb"
+)
+
+func TestSubstituteBodyTreatsOutOfScopePlaceholdersAsInert(t *testing.T) {
+	broker := twoHostBroker(t)
+	jsonBody := `{"a":"` + placeholderA + `","b":"` + placeholderB + `"}`
+	for _, test := range []struct {
+		name, contentType, body, host string
+		want                          string
+		wantNames                     []string
+	}{
+		{"scoped host substitutes only its own secret", "application/json", jsonBody, "a.example.com",
+			`{"a":"real-a-value","b":"` + placeholderB + `"}`, []string{"a_key"}},
+		{"host with no scope leaves JSON untouched", "application/json", jsonBody, "other.example.com", jsonBody, nil},
+		{"host with no scope does not parse bodies", "application/json", "not json " + placeholderA, "other.example.com", "not json " + placeholderA, nil},
+		{"host with no scope allows unsupported media", "application/octet-stream", "bin " + placeholderA, "other.example.com", "bin " + placeholderA, nil},
+		{"out-of-scope form value is inert", "application/x-www-form-urlencoded", "k=" + placeholderB, "a.example.com", "k=" + placeholderB, nil},
+		{"out-of-scope unsupported body is inert", "application/octet-stream", "bin " + placeholderB, "a.example.com", "bin " + placeholderB, nil},
+		{"out-of-scope JSON key is inert", "application/json", `{"` + placeholderB + `":1}`, "a.example.com", `{"` + placeholderB + `":1}`, nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, names, _, err := broker.SubstituteBody(test.contentType, []byte(test.body), "agent", test.host, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != test.want || strings.Join(names, ",") != strings.Join(test.wantNames, ",") {
+				t.Fatalf("body = %q names = %v, want %q %v", got, names, test.want, test.wantNames)
+			}
+		})
+	}
+}
+
+func TestSubstituteBodyStillFailsClosedInScope(t *testing.T) {
+	broker := twoHostBroker(t)
+	for _, test := range []struct {
+		name, contentType, body, client string
+		secure                          bool
+	}{
+		{"unsupported body", "application/octet-stream", "bin " + placeholderA, "agent", true},
+		{"JSON key", "application/json", `{"` + placeholderA + `":1}`, "agent", true},
+		{"form name", "application/x-www-form-urlencoded", placeholderA + "=1", "agent", true},
+		{"malformed JSON", "application/json", "{" + placeholderA, "agent", true},
+		{"plaintext HTTP", "application/json", `{"a":"` + placeholderA + `"}`, "agent", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, _, _, err := broker.SubstituteBody(test.contentType, []byte(test.body), test.client, "a.example.com", test.secure); err == nil {
+				t.Fatal("expected failure")
+			}
+		})
+	}
+	// Another client has no scope on this host, so the same body is inert.
+	if _, _, _, err := broker.SubstituteBody("application/octet-stream", []byte("bin "+placeholderA), "other", "a.example.com", true); err != nil {
+		t.Fatalf("out-of-scope client: %v", err)
+	}
+}
+
+func TestCredentialPositionsStillRejectOutOfScopePlaceholders(t *testing.T) {
+	broker := twoHostBroker(t)
+	req, _ := http.NewRequest(http.MethodGet, "https://b.example.com/", nil)
+	req.Header.Set("Authorization", "Bearer "+placeholderA)
+	if _, err := broker.Apply(req, "agent", "b.example.com", true); err == nil {
+		t.Fatal("header placeholder outside scope must be rejected")
+	}
+	target, _ := url.Parse("https://b.example.com/?k=" + placeholderA)
+	if _, err := broker.SubstituteQuery(target, "agent", "b.example.com", true); err == nil {
+		t.Fatal("query placeholder outside scope must be rejected")
+	}
+}
+
+func TestPlaceholderNamesForReportsOnlyScopedSecrets(t *testing.T) {
+	broker := twoHostBroker(t)
+	data := []byte(placeholderA + " " + placeholderB)
+	for host, want := range map[string]string{"a.example.com": "a_key", "b.example.com": "b_key", "other.example.com": ""} {
+		if got := strings.Join(broker.PlaceholderNamesFor(data, "agent", host), ","); got != want {
+			t.Errorf("PlaceholderNamesFor(%q) = %q, want %q", host, got, want)
+		}
+	}
+	if names := broker.PlaceholderNamesFor(data, "other", "a.example.com"); len(names) != 0 {
+		t.Fatalf("other client names = %v", names)
+	}
+}

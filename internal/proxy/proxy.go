@@ -68,7 +68,7 @@ type SecretBroker interface {
 	Scrub([]byte, string, string) ([]byte, []string)
 	Sanitize([]byte) []byte
 	ContainsPlaceholder([]byte) bool
-	PlaceholderNames([]byte) []string
+	PlaceholderNamesFor(data []byte, client, host string) []string
 }
 
 // hostScoper is implemented by brokers that act only on configured hosts. It
@@ -193,10 +193,10 @@ func (c brokerChain) ScopesHost(client, host string) bool {
 	}
 	return false
 }
-func (c brokerChain) PlaceholderNames(data []byte) []string {
+func (c brokerChain) PlaceholderNamesFor(data []byte, client, host string) []string {
 	var names []string
 	for _, broker := range c.brokers {
-		names = mergeNames(names, broker.PlaceholderNames(data))
+		names = mergeNames(names, broker.PlaceholderNamesFor(data, client, host))
 	}
 	return names
 }

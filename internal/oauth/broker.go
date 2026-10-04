@@ -501,10 +501,11 @@ func (b *Broker) matchDefinition(client, host, requestPath string) (Definition, 
 	return Definition{}, false
 }
 
-// PlaceholderNames reports the virtual-token names present in data. It exposes
-// names only, never token values, so rejections can be attributed in captures
-// and audit records.
-func (b *Broker) PlaceholderNames(data []byte) []string {
+// PlaceholderNamesFor reports the virtual-token names present in data. It
+// exposes names only, never token values, so rejections can be attributed in
+// captures and audit records. Virtual tokens are reported regardless of client
+// and host, so they remain rejected wherever they cannot be substituted.
+func (b *Broker) PlaceholderNamesFor(data []byte, _, _ string) []string {
 	if b == nil {
 		return nil
 	}

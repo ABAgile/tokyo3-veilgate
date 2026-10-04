@@ -219,3 +219,39 @@ func TestReadWebSocketFrameRejectsReservedBitsAndOversize(t *testing.T) {
 		})
 	}
 }
+
+func TestRelayWebSocketForwardsOutOfScopePlaceholdersUnchanged(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		frame wsFrame
+	}{
+		{"binary", wsFrame{fin: true, opcode: wsBinary, payload: []byte("prefix " + testPlaceholder)}},
+		{"control", wsFrame{fin: true, opcode: wsPing, payload: []byte(testPlaceholder)}},
+		{"non-JSON text", wsFrame{fin: true, opcode: wsText, payload: []byte("not json " + testPlaceholder)}},
+		{"JSON text", wsFrame{fin: true, opcode: wsText, payload: []byte(`{"k":"` + testPlaceholder + `"}`)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var wire bytes.Buffer
+			if err := (&wsEndpoint{writer: &wire, writeMask: true}).write(tc.frame); err != nil {
+				t.Fatal(err)
+			}
+			// The test broker scopes its secret to allowed.example only.
+			item := &flow.Flow{}
+			var out bytes.Buffer
+			h := &Handler{Secrets: proxyTestBroker(t), CaptureLimit: 1024, MediationLimit: 4096}
+			_, err := h.relayWebSocket(context.Background(), "client-to-upstream",
+				&wsEndpoint{reader: bufio.NewReader(&wire), expectMask: true},
+				&wsEndpoint{writer: &out},
+				&wsCapture{item: item, remaining: 1024}, "agent", "unscoped.example")
+			if err != nil && !strings.Contains(err.Error(), "EOF") && !strings.Contains(err.Error(), "closed") {
+				t.Fatalf("relay error = %v", err)
+			}
+			if !strings.Contains(out.String(), testPlaceholder) {
+				t.Fatalf("placeholder was not forwarded unchanged: %q", out.String())
+			}
+			if len(item.SecretNames) != 0 {
+				t.Fatalf("secret names = %#v", item.SecretNames)
+			}
+		})
+	}
+}

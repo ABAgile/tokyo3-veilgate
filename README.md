@@ -388,6 +388,19 @@ What each handling mode provides:
 | Client must trust the interception CA | no | yes |
 | Verifies the TLS server name inside the tunnel | no | yes; SNI must match the CONNECT host |
 
+On every intercepted host, mediation buffers each request. Secret placeholders
+are guarded by position. In credential-bearing positions (headers, URL path,
+query) a placeholder outside its configured client and host scope rejects the
+request (`403`) on any intercepted host, instead of being forwarded. In bodies
+and WebSocket messages only secrets scoped to the client and host are
+considered: the body is not parsed when none is, and other secrets'
+placeholders are forwarded as inert text. Response scrubbing of real secret values is scoped by client and host, while
+captures sanitize every configured secret. OAuth is narrower: token responses
+are virtualized only for a client's configured `issuer_host` with a matching
+`token_path` and token fields, and virtual tokens are replaced only on that
+client's `api_hosts` (access tokens) or `issuer_host` (refresh tokens). Request
+bodies are parsed for OAuth only on the issuer host.
+
 Choosing a mode:
 
 | Goal | Settings |
@@ -425,10 +438,15 @@ placements are HTTPS header values, exact query values, exact JSON string
 values, exact form values, and exact JSON string values in outbound WebSocket
 text messages. Basic authentication values are decoded, substituted, and
 re-encoded. Embedded placeholder text inside JSON string or form values is
-preserved as ordinary content unless it is the complete value. Placeholder
-occurrences in headers, query names or values, JSON/form field names, URL paths,
-binary or unsupported bodies, plaintext HTTP use, and use outside the
-configured client/host scope fail closed. Secret definitions retain their
+preserved as ordinary content unless it is the complete value. Placeholders fail
+closed in credential-bearing positions: headers, URL paths, and query names or
+values, when used outside the secret's client/host scope or over plaintext
+HTTP. In bodies and WebSocket messages, a placeholder fails closed only for a
+secret scoped to that client and host and only where it cannot be substituted
+(JSON/form field names, binary or unsupported bodies, WebSocket control frames
+and binary messages, plaintext HTTP). A body headed to a host where no secret is
+scoped to the client is not parsed, and placeholders of secrets scoped
+elsewhere are inert text there. Secret definitions retain their
 independent `clients` and `allowed_hosts` checks when a client enables
 `observe_all_public_hosts`; broad destination observation never broadens a
 secret's authorized hosts.
