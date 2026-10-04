@@ -412,6 +412,39 @@ Choosing a mode:
 | Exempt a few heavy hosts from `all` mode | `intercept_mode` `all`, those hosts in `opaque_hosts` |
 | Metadata-only audit, no interception | omit the interception CA (secret and OAuth brokers then refuse to start) |
 
+### Reloading the client policy
+
+`veilgated` re-reads `VEILGATED_CLIENTS_FILE` when it receives `SIGHUP`, so
+`allowed_hosts`, `opaque_hosts`, `intercept_mode`, `intercept_hosts`, ports, and
+tokens can change without a restart. A file that cannot be read or fails
+validation is logged (`client policy reload failed; keeping previous policy`)
+and the running policy stays in force. A successful reload logs
+`client policy reloaded`.
+
+- New connections use the reloaded policy immediately.
+- Intercepted sessions re-check their client and destination on every request,
+  so a removed destination or client is refused (`403`) without reconnecting.
+- Opaque tunnels and requests already in flight keep the policy they were
+  admitted under until they close.
+- Only the client policy is reloaded. Secrets, OAuth brokers and their derived
+  intercept hosts, the interception CA, certificates, and environment variables
+  still need a restart.
+
+The runtime image is distroless and has no shell or `kill`, so signal the
+container from the host; the signal is sent by the Docker daemon, so the
+container's `nonroot` user does not matter:
+
+```sh
+docker compose kill -s HUP veilgated   # or: docker kill --signal=HUP <container>
+docker compose logs --tail 5 veilgated
+```
+
+The Compose file sets `init: true`, so the signal reaches `docker-init` as PID 1,
+which forwards it to `veilgated`. Without an init process `veilgated` is PID 1
+and receives it directly. `kill` only sends the signal; it does not restart the
+container. Edit the mounted file (the config volume is read-only inside the
+container) before sending it.
+
 ### Secret substitution
 
 Secret definitions contain an opaque sandbox-visible placeholder and the name

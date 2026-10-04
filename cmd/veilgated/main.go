@@ -14,6 +14,7 @@
 // Required material (the default paths are used when the variables are unset):
 //
 //	VEILGATED_CLIENTS_FILE  JSON client policy path (default "/etc/veilgate/clients.json").
+//	                        Re-read on SIGHUP; an invalid file keeps the previous policy.
 //	VEILGATED_PROXY_CERT    HTTPS proxy server certificate PEM (default "/etc/veilgate/proxy.crt").
 //	VEILGATED_PROXY_KEY     Matching HTTPS proxy server private key PEM (default "/etc/veilgate/proxy.key").
 //
@@ -79,7 +80,9 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/abagile/tokyo3-base/cli"
@@ -404,6 +407,19 @@ func runServe(ctx context.Context) error {
 		rt.Log.Warn("console running unauthenticated", "console_addr", consoleAddr, "reason", "loopback listen address")
 	}
 	rt.Log.Info("veilgate starting", "proxy_addr", proxyAddr, "console_addr", consoleAddr, "clients", len(policy.Clients), "any_public_host_clients", anyPublicHostClientCount(policy))
+	hup := make(chan os.Signal, 1)
+	signal.Notify(hup, syscall.SIGHUP)
+	defer signal.Stop(hup)
+	guard.Go(rt.Log, "reload client policy", func() {
+		for {
+			select {
+			case <-rt.Ctx.Done():
+				return
+			case <-hup:
+				reloadClientPolicy(policyPath, proxyHandler, rt.Log)
+			}
+		}
+	})
 	return run.Group(rt.Ctx,
 		run.HTTPServer(proxyServer, 10*time.Second, true),
 		run.HTTPServer(consoleServer, 10*time.Second, true),
@@ -491,6 +507,23 @@ func isLoopbackConsoleAddr(addr string) bool {
 	}
 	parsed, err := netip.ParseAddr(host)
 	return err == nil && parsed.Unmap().IsLoopback()
+}
+
+// policySetter is the part of the proxy handler a policy reload needs.
+type policySetter interface{ SetPolicy(*config.File) }
+
+// reloadClientPolicy re-reads the client policy and swaps it in. A file that
+// cannot be read or validated is logged and the running policy is kept, so a
+// bad edit never leaves the proxy without a policy.
+func reloadClientPolicy(path string, target policySetter, log *slog.Logger) bool {
+	policy, err := config.Load(path)
+	if err != nil {
+		log.Error("client policy reload failed; keeping previous policy", "path", path, "err", err)
+		return false
+	}
+	target.SetPolicy(policy)
+	log.Info("client policy reloaded", "clients", len(policy.Clients), "any_public_host_clients", anyPublicHostClientCount(policy))
+	return true
 }
 
 func anyPublicHostClientCount(policy *config.File) int {

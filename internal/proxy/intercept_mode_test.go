@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"testing"
 
@@ -76,4 +78,49 @@ func TestUsesOpaqueTunnelByInterceptMode(t *testing.T) {
 			t.Fatal("broker scoped to agent must not intercept for other")
 		}
 	})
+}
+
+func TestSetPolicyReplacesClientsAndRechecksSessions(t *testing.T) {
+	load := func(hosts ...string) *config.File {
+		policy := &config.File{Clients: []config.Client{{
+			Name: "agent", Token: "012345678901234567890123", AllowedHosts: hosts, AllowedPorts: []int{443},
+		}}}
+		if err := policy.Validate(); err != nil {
+			t.Fatal(err)
+		}
+		return policy
+	}
+	initial := load("a.example", "b.example")
+	h := &Handler{Policy: initial}
+	identity := &initial.Clients[0]
+
+	authenticate := func(token string) bool {
+		req := httptest.NewRequest(http.MethodConnect, "a.example:443", nil)
+		req.Header.Set("Proxy-Authorization", "Bearer "+token)
+		_, ok := h.authenticate(req)
+		return ok
+	}
+	if !authenticate("012345678901234567890123") {
+		t.Fatal("initial token rejected")
+	}
+	if current := h.currentClient(identity); current == nil || !current.Allows("b.example", 443) {
+		t.Fatal("initial policy should allow b.example")
+	}
+
+	reloaded := load("a.example")
+	reloaded.Clients[0].Token = "abcdefghijklmnopqrstuvwx"
+	h.SetPolicy(reloaded)
+	if authenticate("012345678901234567890123") || !authenticate("abcdefghijklmnopqrstuvwx") {
+		t.Fatal("authentication did not switch to the reloaded policy")
+	}
+	// A session admitted under the old policy is re-checked against the new one.
+	if current := h.currentClient(identity); current == nil || current.Allows("b.example", 443) || !current.Allows("a.example", 443) {
+		t.Fatal("session was not re-checked against the reloaded policy")
+	}
+
+	removed := &config.File{Clients: []config.Client{{Name: "other", Token: "zzzzzzzzzzzzzzzzzzzzzzzz", AllowedHosts: []string{"a.example"}, AllowedPorts: []int{443}}}}
+	h.SetPolicy(removed)
+	if h.currentClient(identity) != nil {
+		t.Fatal("a client removed by reload must be denied")
+	}
 }

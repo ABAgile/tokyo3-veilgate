@@ -156,6 +156,16 @@ func validHostname(host string) bool {
 	return hostpattern.Valid(host)
 }
 
+// Client returns the client with the given name.
+func (f *File) Client(name string) (*Client, bool) {
+	for i := range f.Clients {
+		if f.Clients[i].Name == name {
+			return &f.Clients[i], true
+		}
+	}
+	return nil, false
+}
+
 // Authenticate returns the client matching a bearer token. Every configured
 // token is compared to avoid making the first matching position observable.
 //

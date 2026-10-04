@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/abagile/veilgate/internal/config"
 )
 
 func TestConfigureLogLevel(t *testing.T) {
@@ -172,5 +175,45 @@ func TestRunServeValidatesConfigurationBeforeStarting(t *testing.T) {
 				t.Fatalf("runServe() error = %v, want message containing %q", err, test.want)
 			}
 		})
+	}
+}
+
+type recordingPolicySetter struct{ policy *config.File }
+
+func (r *recordingPolicySetter) SetPolicy(policy *config.File) { r.policy = policy }
+
+func TestReloadClientPolicyKeepsPreviousPolicyOnInvalidFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "clients.json")
+	write := func(content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	target := &recordingPolicySetter{}
+
+	write(`{"clients":[{"name":"a","token":"012345678901234567890123","allowed_hosts":["example.com"]}]}`)
+	if !reloadClientPolicy(path, target, log) || target.policy == nil || len(target.policy.Clients) != 1 {
+		t.Fatalf("valid policy not applied: %#v", target.policy)
+	}
+	applied := target.policy
+
+	for name, content := range map[string]string{
+		"malformed":      `{"clients":[`,
+		"no clients":     `{"clients":[]}`,
+		"unknown field":  `{"clients":[{"name":"a","token":"012345678901234567890123","allowed_hosts":["example.com"],"bogus":1}]}`,
+		"short token":    `{"clients":[{"name":"a","token":"short","allowed_hosts":["example.com"]}]}`,
+		"listed missing": `{"clients":[{"name":"a","token":"012345678901234567890123","allowed_hosts":["example.com"],"intercept_hosts":["x.example"]}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			write(content)
+			if reloadClientPolicy(path, target, log) || target.policy != applied {
+				t.Fatal("invalid policy replaced the running one")
+			}
+		})
+	}
+	if reloadClientPolicy(filepath.Join(t.TempDir(), "missing.json"), target, log) || target.policy != applied {
+		t.Fatal("missing file replaced the running policy")
 	}
 }

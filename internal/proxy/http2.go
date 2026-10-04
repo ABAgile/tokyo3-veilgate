@@ -68,14 +68,15 @@ func (h *Handler) interceptHTTP2(conn *tls.Conn, outer *http.Request, identity *
 				return
 			}
 			item.Trace("request-authority", "pass", "HTTP/2 authority matches CONNECT authority and TLS SNI")
-			if !identity.Allows(host, port) {
+			current := h.currentClient(identity)
+			if current == nil || !current.Allows(host, port) {
 				item.Status = http.StatusForbidden
 				item.Reason = "destination is no longer allowed by client policy"
 				item.Trace("destination-acl", "fail", item.Reason)
 				http.Error(w, item.Reason, item.Status)
 				return
 			}
-			item.Trace("destination-acl", "pass", destinationPolicyDetail(identity))
+			item.Trace("destination-acl", "pass", destinationPolicyDetail(current))
 			ip, err := h.resolver().Resolve(req.Context(), host)
 			if err != nil {
 				item.Status = http.StatusForbidden

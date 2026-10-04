@@ -272,3 +272,16 @@ func TestDeprecatedObserveAllPublicHostsAliasesAllowAnyPublicHost(t *testing.T) 
 		t.Fatalf("allow_any_public_host not honored: %v", err)
 	}
 }
+
+func TestFileClientLooksUpByName(t *testing.T) {
+	f := &File{Clients: []Client{
+		{Name: "a", Token: "012345678901234567890123", AllowedHosts: []string{"example.com"}},
+		{Name: "b", Token: "abcdefghijklmnopqrstuvwx", AllowedHosts: []string{"example.com"}},
+	}}
+	if client, ok := f.Client("b"); !ok || client != &f.Clients[1] {
+		t.Fatalf("Client(b) = %v, %v", client, ok)
+	}
+	if _, ok := f.Client("missing"); ok {
+		t.Fatal("unexpected client")
+	}
+}

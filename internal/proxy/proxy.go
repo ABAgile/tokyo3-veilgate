@@ -225,6 +225,9 @@ type Handler struct {
 	RecordWorkers                 int
 	DialContext                   func(context.Context, string, string) (net.Conn, error)
 
+	// reloadedPolicy, once set by SetPolicy, supersedes Policy.
+	reloadedPolicy atomic.Pointer[config.File]
+
 	transportMu        sync.Mutex
 	transports         map[upstreamTransportKey]*cachedUpstreamTransport
 	drainingTransports []*cachedUpstreamTransport
@@ -513,8 +516,38 @@ func (h *Handler) resolver() Resolver {
 	return PublicResolver{}
 }
 
+// SetPolicy atomically replaces the client policy. New connections use it at
+// once, and intercepted sessions re-check their client and destination against
+// it on every request. Opaque tunnels and requests already in flight keep the
+// policy they were admitted under.
+func (h *Handler) SetPolicy(policy *config.File) {
+	h.reloadedPolicy.Store(policy)
+}
+
+func (h *Handler) policy() *config.File {
+	if policy := h.reloadedPolicy.Load(); policy != nil {
+		return policy
+	}
+	return h.Policy
+}
+
+// currentClient returns identity's entry in the current policy, or nil when a
+// reload has removed the client.
+func (h *Handler) currentClient(identity *config.Client) *config.Client {
+	policy := h.policy()
+	if policy == nil {
+		return identity
+	}
+	current, ok := policy.Client(identity.Name)
+	if !ok {
+		return nil
+	}
+	return current
+}
+
 func (h *Handler) authenticate(r *http.Request) (*config.Client, bool) {
-	if h.Policy == nil {
+	policy := h.policy()
+	if policy == nil {
 		return nil, false
 	}
 	raw := r.Header.Get("Proxy-Authorization")
@@ -525,7 +558,7 @@ func (h *Handler) authenticate(r *http.Request) (*config.Client, bool) {
 	}
 	switch strings.ToLower(scheme) {
 	case "bearer":
-		return h.Policy.Authenticate(strings.TrimSpace(value))
+		return policy.Authenticate(strings.TrimSpace(value))
 	case "basic":
 		decoded, err := base64.StdEncoding.DecodeString(strings.TrimSpace(value))
 		if err != nil {
@@ -535,7 +568,7 @@ func (h *Handler) authenticate(r *http.Request) (*config.Client, bool) {
 		if !ok {
 			return nil, false
 		}
-		client, valid := h.Policy.Authenticate(token)
+		client, valid := policy.Authenticate(token)
 		return client, valid && client.Name == name
 	default:
 		return nil, false
@@ -776,13 +809,14 @@ func (h *Handler) handleInterceptedRequest(downstream io.Writer, downstreamReade
 		return status, 0, 0, reason, true
 	}
 	item.Trace("request-authority", "pass", "Host matches CONNECT authority and TLS SNI")
-	if !identity.Allows(host, port) {
+	current := h.currentClient(identity)
+	if current == nil || !current.Allows(host, port) {
 		reason := "destination is no longer allowed by client policy"
 		item.Trace("destination-acl", "fail", reason)
 		_ = writeSimpleResponse(downstream, req, http.StatusForbidden, reason)
 		return http.StatusForbidden, 0, 0, reason, true
 	}
-	item.Trace("destination-acl", "pass", destinationPolicyDetail(identity))
+	item.Trace("destination-acl", "pass", destinationPolicyDetail(current))
 
 	ip, err := h.resolver().Resolve(req.Context(), host)
 	if err != nil {
