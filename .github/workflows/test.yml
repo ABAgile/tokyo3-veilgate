@@ -18,15 +18,17 @@ jobs:
           cache: true
 
       - uses: actions/cache@v5
+        id: cache-go-tools
         with:
           path: ~/go/bin
-          key: go-tools-${{ hashFiles('go.mod') }}-${{ steps.setup-go.outputs.go-version }}
+          key: go-tools-${{ hashFiles('go.mod', '.github/workflows/test.yml') }}-${{ steps.setup-go.outputs.go-version }}
 
-      - run: |
-          go install honnef.co/go/tools/cmd/staticcheck@latest
-          go install golang.org/x/tools/gopls@latest
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-          go install golang.org/x/tools/cmd/deadcode@latest
+      - if: steps.cache-go-tools.outputs.cache-hit != 'true'
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.8.1
+          go install golang.org/x/tools/gopls@v0.23.0
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
+          go install golang.org/x/tools/cmd/deadcode@v0.51.0
 
       - run: node --check internal/console/static/app.js
       - run: node --check internal/console/static/formatters.js
