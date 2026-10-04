@@ -23,7 +23,7 @@ func (h *Handler) interceptedHTTP2MaxConcurrentStreams() uint32 {
 	// A mediated stream can retain a decoded request and response up to the
 	// mediation limit. Reserve two limits per stream and cap the total budget
 	// at 512 MiB so the HTTP/2 default of 250 cannot turn one CONNECT session
-	// into a large unbounded allocation.
+	// into a large unbounded allocation. The 32 MiB default admits 8 streams.
 	streams := interceptedHTTP2BufferBudget / h.mediationLimit() / 2
 	streams = max(streams, int64(1))
 	streams = min(streams, maxInterceptedHTTP2Streams)

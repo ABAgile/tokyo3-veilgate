@@ -682,7 +682,8 @@ flow has no mediated response body. SSE events and NDJSON records are scrubbed
 and flushed incrementally; the mediation limit applies to each decoded event
 or record, not the complete stream. The intercepted HTTP/2 stream cap reserves
 up to 512 MiB of mediation buffer budget, so increasing this limit reduces the
-number of concurrently admitted streams. HTTP `gzip`, `deflate`, Brotli (`br`), and Zstandard
+number of concurrently admitted streams; the 32 MiB default admits 8 streams per
+CONNECT session (16 at 16 MiB, 4 at the 64 MiB maximum). HTTP `gzip`, `deflate`, Brotli (`br`), and Zstandard
 (`zstd`) bodies and streams
 are decoded for substitution, scrubbing, and capture, then re-encoded with their
 original coding. Stacked or unknown codings fail closed. WebSocket text and
@@ -717,7 +718,7 @@ remain omitted.
 | `VEILGATED_SESSION_MAX_DURATION` | no | `2h` | Maximum proxy request/session lifetime; at most 168h |
 | `VEILGATED_UPSTREAM_RESPONSE_HEADER_TIMEOUT` | no | `60s` | Maximum wait for upstream response headers; 1s–10m |
 | `VEILGATED_CAPTURE_LIMIT_BYTES` | no | `1048576` | Maximum retained bytes per capture section; 1024–4194304 |
-| `VEILGATED_MEDIATION_LIMIT_BYTES` | no | `8388608` | Maximum decoded body or WebSocket message; also sizes the intercepted HTTP/2 stream cap; at least capture limit, at most 67108864 |
+| `VEILGATED_MEDIATION_LIMIT_BYTES` | no | `33554432` | Maximum decoded body or WebSocket message; also sizes the intercepted HTTP/2 stream cap; at least capture limit, at most 67108864 |
 | `VEILGATED_RECORD_QUEUE_CAPACITY` | no | `256` | Completed flows buffered for asynchronous recording; at least 1 |
 | `VEILGATED_RECORD_WORKERS` | no | `4` | Concurrent flow-recording workers; at least 1 |
 | `VEILGATED_INTERCEPT_CA_CERT` | no | `/etc/veilgate/intercept-ca.crt` when present | Interception CA certificate PEM |

@@ -18,7 +18,7 @@ import (
 
 const (
 	defaultCaptureLimit   int64 = 1 << 20
-	defaultMediationLimit int64 = 8 << 20
+	defaultMediationLimit int64 = 32 << 20
 )
 
 var errCaptureLimit = errors.New("traffic payload exceeds capture limit")

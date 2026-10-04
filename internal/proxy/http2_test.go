@@ -27,8 +27,8 @@ import (
 )
 
 func TestDefaultMediationLimit(t *testing.T) {
-	if got := (&Handler{}).mediationLimit(); got != 8<<20 {
-		t.Fatalf("mediationLimit() = %d, want %d", got, 8<<20)
+	if got := (&Handler{}).mediationLimit(); got != 32<<20 {
+		t.Fatalf("mediationLimit() = %d, want %d", got, 32<<20)
 	}
 }
 
@@ -38,7 +38,7 @@ func TestInterceptedHTTP2MaxConcurrentStreams(t *testing.T) {
 		limit int64
 		want  uint32
 	}{
-		{name: "default mediation limit", want: 32},
+		{name: "default mediation limit", want: 8},
 		{name: "small limit is capped", limit: 1, want: 64},
 		{name: "four megabytes", limit: 4 << 20, want: 64},
 		{name: "eight megabytes", limit: 8 << 20, want: 32},
