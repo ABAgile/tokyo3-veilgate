@@ -33,7 +33,7 @@ func TestUsesOpaqueTunnelByInterceptMode(t *testing.T) {
 		}
 		return &policy.Clients[0]
 	}
-	listed := newClient(config.InterceptListed, []string{"extra.example"}, []string{"cdn.wild.example"})
+	listed := newClient(config.ModeOpaque, []string{"extra.example"}, []string{"cdn.wild.example"})
 	all := newClient("", nil, []string{"registry.example"})
 
 	for _, test := range []struct {
@@ -71,7 +71,7 @@ func TestUsesOpaqueTunnelByInterceptMode(t *testing.T) {
 	})
 
 	t.Run("broker scoped to another client", func(t *testing.T) {
-		other := newClient(config.InterceptListed, nil, nil)
+		other := newClient(config.ModeOpaque, nil, nil)
 		other.Name = "other"
 		h := &Handler{Secrets: broker}
 		if !h.usesOpaqueTunnel(other, "api.model.example") {

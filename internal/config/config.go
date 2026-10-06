@@ -21,27 +21,46 @@ type File struct {
 	Clients []Client `json:"clients"`
 }
 
-// Interception modes for HTTPS CONNECT destinations.
+// Handling modes for HTTPS CONNECT destinations. intercept_mode selects the
+// default for allowed hosts; opaque_hosts, inspect_hosts, intercept_hosts, and
+// allowed_rules override it per host.
 const (
-	// InterceptAll terminates TLS for every allowed host not listed in
-	// OpaqueHosts. It is the default.
-	InterceptAll = "all"
-	// InterceptListed keeps every allowed host an opaque tunnel except hosts
-	// listed in InterceptHosts or scoped to the client by a secret or OAuth
-	// broker.
-	InterceptListed = "listed"
+	// ModeIntercept terminates TLS and fully mediates every allowed host. It is
+	// the default.
+	ModeIntercept = "intercept"
+	// ModeInspect terminates TLS and inspects every allowed host without
+	// buffering bodies. Hosts are read-only (GET and HEAD without a body)
+	// unless AllowedRules say otherwise.
+	ModeInspect = "inspect"
+	// ModeOpaque relays every allowed host as an opaque TCP tunnel.
+	ModeOpaque = "opaque"
+
+	// Deprecated spellings of ModeIntercept and ModeOpaque, folded into them
+	// by Validate.
+	legacyModeAll    = "all"
+	legacyModeListed = "listed"
 )
 
 // Client binds one proxy credential to an identity and destination policy.
 type Client struct {
-	Name               string   `json:"name"`
-	Token              string   `json:"token"`
-	AllowedHosts       []string `json:"allowed_hosts,omitempty"`
-	OpaqueHosts        []string `json:"opaque_hosts,omitempty"`
-	InterceptMode      string   `json:"intercept_mode,omitempty"`
-	InterceptHosts     []string `json:"intercept_hosts,omitempty"`
-	AllowedPorts       []int    `json:"allowed_ports,omitempty"`
-	AllowAnyPublicHost bool     `json:"allow_any_public_host,omitempty"`
+	Name           string   `json:"name"`
+	Token          string   `json:"token"`
+	AllowedHosts   []string `json:"allowed_hosts,omitempty"`
+	OpaqueHosts    []string `json:"opaque_hosts,omitempty"`
+	InterceptMode  string   `json:"intercept_mode,omitempty"`
+	InterceptHosts []string `json:"intercept_hosts,omitempty"`
+	// InspectHosts selects metadata-only interception: TLS is terminated and
+	// request rules, headers, and the URL are enforced and audited, but bodies
+	// stream through unbuffered, undecoded, and uncaptured. Hosts in
+	// InterceptHosts or scoped by a secret or OAuth broker are fully mediated
+	// instead; OpaqueHosts still wins unless AllowedRules apply to the host.
+	// An inspect host without an AllowedRules entry is read-only: GET and
+	// HEAD without a request body. An explicit rule replaces that default.
+	InspectHosts []string `json:"inspect_hosts,omitempty"`
+	// AllowedRules restricts method, path, and body size per host.
+	AllowedRules       []Rule `json:"allowed_rules,omitempty"`
+	AllowedPorts       []int  `json:"allowed_ports,omitempty"`
+	AllowAnyPublicHost bool   `json:"allow_any_public_host,omitempty"`
 	// ObserveAllPublicHosts is the deprecated name of AllowAnyPublicHost.
 	// Validate folds it into AllowAnyPublicHost, so only that field is
 	// consulted afterwards.
@@ -120,14 +139,13 @@ func (f *File) Validate() error {
 			c.OpaqueHosts[j] = normalized
 		}
 		switch c.InterceptMode {
-		case "":
-			c.InterceptMode = InterceptAll
-		case InterceptAll, InterceptListed:
+		case "", legacyModeAll:
+			c.InterceptMode = ModeIntercept
+		case legacyModeListed:
+			c.InterceptMode = ModeOpaque
+		case ModeIntercept, ModeInspect, ModeOpaque:
 		default:
-			return fmt.Errorf("client %q intercept_mode must be %q or %q", c.Name, InterceptAll, InterceptListed)
-		}
-		if c.InterceptMode != InterceptListed && len(c.InterceptHosts) > 0 {
-			return fmt.Errorf("client %q intercept_hosts requires intercept_mode %q", c.Name, InterceptListed)
+			return fmt.Errorf("client %q intercept_mode must be %q, %q, or %q", c.Name, ModeIntercept, ModeInspect, ModeOpaque)
 		}
 		for j, pattern := range c.InterceptHosts {
 			normalized, err := normalizePattern(pattern)
@@ -136,6 +154,18 @@ func (f *File) Validate() error {
 			}
 			c.InterceptHosts[j] = normalized
 		}
+		for j, pattern := range c.InspectHosts {
+			normalized, err := normalizePattern(pattern)
+			if err != nil {
+				return fmt.Errorf("client %q inspect_hosts[%d]: %w", c.Name, j, err)
+			}
+			c.InspectHosts[j] = normalized
+		}
+		rules, err := expandRules(c.AllowedRules)
+		if err != nil {
+			return fmt.Errorf("client %q %w", c.Name, err)
+		}
+		c.AllowedRules = rules
 		if len(c.AllowedPorts) == 0 {
 			c.AllowedPorts = []int{443}
 		}
@@ -213,12 +243,6 @@ func (c *Client) Allows(host string, port int) bool {
 		return true
 	}
 	return hostpattern.Matches(c.AllowedHosts, host)
-}
-
-// InterceptsListedOnly reports whether destinations stay opaque tunnels unless
-// explicitly selected for interception.
-func (c *Client) InterceptsListedOnly() bool {
-	return c.InterceptMode == InterceptListed
 }
 
 // InterceptsListedHost reports whether host matches InterceptHosts. Like

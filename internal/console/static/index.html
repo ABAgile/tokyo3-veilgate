@@ -43,7 +43,7 @@
           <label>Client<input id="filter-client" name="client" autocomplete="off"></label>
           <label>Host<input id="filter-host" name="host" list="host-list" autocomplete="off"><datalist id="host-list"></datalist></label>
           <label>Decision<select id="filter-decision" name="decision"><option value="">Any decision</option><option value="allowed">Allowed</option><option value="denied">Denied</option></select></label>
-          <label>Mode<select id="filter-mode" name="mode"><option value="">Any mode</option><option value="direct">Direct</option><option value="intercepted">Intercepted HTTP/1.1</option><option value="intercepted-h2">Intercepted HTTP/2</option><option value="websocket">WebSocket</option><option value="intercepted-session">Intercepted session</option><option value="opaque-tunnel">Opaque tunnel</option></select></label>
+          <label>Mode<select id="filter-mode" name="mode"><option value="">Any mode</option><option value="direct">Direct</option><option value="intercepted">Intercepted HTTP/1.1</option><option value="intercepted-h2">Intercepted HTTP/2</option><option value="websocket">WebSocket</option><option value="inspected">Inspected HTTP/1.1</option><option value="inspected-h2">Inspected HTTP/2</option><option value="intercepted-session">Intercepted session</option><option value="inspected-session">Inspected session</option><option value="opaque-tunnel">Opaque tunnel</option></select></label>
           <div class="filter-actions"><button class="primary" type="submit">Apply filters</button><button id="reset-filters" class="secondary" type="button">Reset</button></div>
         </form>
         <div class="table-wrap">

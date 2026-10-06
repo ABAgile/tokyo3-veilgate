@@ -293,31 +293,128 @@ TLS interception is enabled. Authentication, public-DNS/IP checks, timeouts,
 byte accounting, and audit recording still apply, but TLS application contents,
 secret substitution, and application-data captures are unavailable for that session.
 
-By default every other allowed host is intercepted (`"intercept_mode": "all"`).
-Setting `"intercept_mode": "listed"` inverts that: allowed hosts stay opaque
-tunnels unless they are in `intercept_hosts` (same pattern syntax) or a secret
-or OAuth broker is scoped to the client for that host (static secret
-`allowed_hosts`, OAuth `issuer_host` and `api_hosts`). `opaque_hosts` still wins
-over any interception match. This keeps package registries, downloads, and other
-bulk traffic out of the body-buffering path while model APIs and credential
-endpoints remain mediated:
+`intercept_mode` sets the **default handling** of every other allowed host, and
+the per-host lists override it:
+
+| `intercept_mode` | Default handling of an allowed host |
+| --- | --- |
+| `intercept` (default) | TLS terminated, bodies fully mediated |
+| `inspect` | TLS terminated, bodies streamed untouched, read-only unless rules say otherwise (see below) |
+| `opaque` | opaque TCP tunnel |
+
+`all` and `listed` are still accepted as deprecated spellings of `intercept` and
+`opaque`.
+
+| List | Effect on a matching host |
+| --- | --- |
+| `opaque_hosts` | opaque tunnel (wins over everything below, unless `allowed_rules` apply) |
+| `intercept_hosts` | fully mediated |
+| `inspect_hosts` | metadata-only inspection |
+| `allowed_rules` | enforces method, path, and size; never an opaque tunnel |
+
+Hosts scoped to the client by a secret or OAuth broker (static secret
+`allowed_hosts`, OAuth `issuer_host` and `api_hosts`) are always fully mediated,
+because substitution needs the bodies. All lists use the same pattern syntax
+(exact host or leftmost-label wildcard). With `opaque`, package registries,
+downloads, and other bulk traffic stay out of the body-buffering path while model
+APIs and credential endpoints remain mediated:
 
 ```json
 {
   "name": "agent-dev",
   "token": "a-long-random-lifecycle-scoped-token",
   "allowed_hosts": ["api.anthropic.com", "platform.claude.com", "registry.npmjs.org"],
-  "intercept_mode": "listed",
+  "intercept_mode": "opaque",
   "intercept_hosts": ["api.openai.com"],
   "allowed_ports": [443]
 }
 ```
 
-`intercept_hosts` is rejected unless `intercept_mode` is `listed`. Placeholders
-sent to an opaque host are never substituted, so no real credential leaves the
-daemon, but application data for opaque hosts is not inspected or captured.
-Combine `listed` with an explicit `allowed_hosts` list rather than
+Placeholders sent to an opaque host are never substituted, so no real credential
+leaves the daemon, but application data for opaque hosts is not inspected or
+captured. Combine `opaque` with an explicit `allowed_hosts` list rather than
 `allow_any_public_host` when egress should be limited as well.
+
+`"intercept_mode": "inspect"` makes metadata-only inspection the default: every
+allowed host is TLS-terminated and audited by method, URL, headers, status and
+bytes, with bodies streamed untouched, and is **read-only** (see below) unless
+`allowed_rules` say otherwise. `inspect_hosts` is redundant in this mode. The
+interception CA is required: without one, every CONNECT is refused with `503`.
+
+#### Metadata-only inspection and request rules
+
+`inspect_hosts` (same pattern syntax) selects a third handling mode between an
+opaque tunnel and full mediation. Veilgate terminates TLS, so the Host/SNI check,
+the per-request destination re-check, request rules, headers, URL, status, and
+byte counts are enforced and audited, but request and response bodies stream
+through without buffering, decoding, substitution, or capture. The mediation limit
+(`VEILGATED_MEDIATION_LIMIT_BYTES`) and the HTTP/2 stream cap therefore do not apply, which suits large downloads
+from shared hosts. WebSocket upgrades are refused there. The client must trust
+the interception CA, and an interception CA must be configured.
+
+An inspect host with no `allowed_rules` entry is **read-only by default**: only
+`GET` and `HEAD` without a request body are permitted (other methods are `403`,
+a body is `413`, and method-override headers are refused), and the denial names
+the default policy. Any explicit rule for the host replaces that default; to
+open a host fully, add `{"host": "example.com", "path_prefixes": ["/"]}`. If no
+interception CA is configured, a CONNECT to an inspect host fails with `503`
+instead of falling back to an opaque tunnel.
+
+`allowed_rules` restricts what a client may send to a host. A host that has any
+rule is restricted: a request must satisfy at least one rule for that host.
+Hosts without rules are unaffected. Rules are checked on every intercepted
+request and on plain HTTP requests.
+
+```json
+{
+  "allowed_hosts": ["storage.googleapis.com", "github.com"],
+  "intercept_mode": "opaque",
+  "inspect_hosts": ["storage.googleapis.com"],
+  "allowed_rules": [
+    {"hosts": ["github.com", "registry.npmjs.org"], "methods": ["GET", "HEAD"]},
+    {"host": "storage.googleapis.com", "methods": ["GET", "HEAD"],
+     "path_prefixes": ["/proxy-golang-org-prod/"]},
+    {"host": "storage.googleapis.com", "methods": ["PUT"],
+     "path_prefixes": ["/uploads/"], "max_request_bytes": 1048576}
+  ]
+}
+```
+
+- `host` is an exact host or `*.` wildcard; `hosts` is a list of them, so one
+  rule can cover many hosts (set one of the two, not both). A `hosts` rule is
+  expanded at load into one single-host rule each, so it behaves exactly like
+  repeating the rule per host. Prefer sharing only `methods` and
+  `max_request_bytes`; a shared `path_prefixes` applies the same paths to every
+  host. Several rules may name one host.
+- `methods` (case-insensitive) and `path_prefixes` are lists; omitted means any.
+  A rule must set at least one of `methods`, `path_prefixes`, `max_request_bytes`.
+- A prefix ending in `/` matches that subtree; otherwise it matches the exact
+  path or the subtree below it (`/bucket` matches `/bucket` and `/bucket/x`, not
+  `/bucketeer`). Matching is literal and case-sensitive on the decoded path.
+  There is no regular-expression support.
+- Prefixes must be canonical: absolute, with no `.`/`..`/empty segments and no
+  `%`, `?`, `#`, or `\`. Requests whose path has dot segments, encoded `/` or
+  `\`, control characters, or double encoding match no prefix. Requests carrying
+  `X-HTTP-Method-Override`, `X-HTTP-Method`, or `X-Method-Override` are refused
+  (`403`) on restricted hosts.
+- The path is only consulted by rules that set `path_prefixes`. A request whose
+  path is ambiguous (see above) simply matches no prefix, so a method-only rule,
+  or the default read-only policy, still permits names such as npm's
+  `/@scope%2fpkg`; a prefix rule denies them rather than guess how the origin
+  would decode the separator.
+- `max_request_bytes` caps the request body: a declared `Content-Length` over it
+  is `413`, and an upload of unknown length is cut off at the cap.
+- A host with rules is never an opaque tunnel, even if listed in `opaque_hosts`,
+  and a CONNECT to it fails with `503` when no interception CA is configured.
+
+Precedence for an allowed CONNECT destination: `opaque_hosts` (unless rules
+apply), then `intercept_hosts` or a scoped secret/OAuth broker (full), then
+`inspect_hosts` (metadata-only), then `intercept_mode` (`intercept`: full,
+`opaque`: opaque, `inspect`: metadata-only). Rules never lower the
+depth: they only keep a host out of an opaque tunnel, so a rule-bearing host that
+`intercept_mode` would leave opaque (or `opaque_hosts` lists) is inspected
+metadata-only, while in `intercept` mode it stays fully mediated. Flows are
+recorded with mode `inspected`, `inspected-h2`, or `inspected-session`.
 
 For a short-lived broad-egress client, explicit host matching can be replaced
 with authenticated access to any valid hostname whose resolved address passes
@@ -367,14 +464,15 @@ CA configured; without one, every allowed CONNECT is an opaque tunnel):
 
 | Client settings | Not allowed or non-public | In `opaque_hosts` | In `intercept_hosts` or broker-scoped | Any other allowed host |
 | --- | --- | --- | --- | --- |
-| `allowed_hosts`, `intercept_mode` `all` (default) | `403` | opaque tunnel | intercepted | intercepted |
-| `allowed_hosts`, `intercept_mode` `listed` | `403` | opaque tunnel | intercepted | opaque tunnel |
-| `allow_any_public_host`, `all` | `403` only for non-public or disallowed port | opaque tunnel | intercepted | intercepted |
-| `allow_any_public_host`, `listed` | `403` only for non-public or disallowed port | opaque tunnel | intercepted | opaque tunnel |
+| `allowed_hosts`, `intercept_mode` `intercept` (default) | `403` | opaque tunnel | intercepted | intercepted |
+| `allowed_hosts`, `intercept_mode` `opaque` | `403` | opaque tunnel | intercepted | opaque tunnel |
+| `allow_any_public_host`, `intercept` | `403` only for non-public or disallowed port | opaque tunnel | intercepted | intercepted |
+| `allow_any_public_host`, `opaque` | `403` only for non-public or disallowed port | opaque tunnel | intercepted | opaque tunnel |
+| `allowed_hosts` or `allow_any_public_host`, `intercept_mode` `inspect` | `403` | opaque tunnel | intercepted | inspected (metadata-only, read-only by default) |
 
 "Broker-scoped" means a static secret `allowed_hosts` entry, or an OAuth
 `issuer_host` or `api_hosts` entry, that names the client. `opaque_hosts` wins
-over the other two columns. `intercept_hosts` is only valid with `listed`.
+over the other two columns.
 
 What each handling mode provides:
 
@@ -406,17 +504,20 @@ Choosing a mode:
 
 | Goal | Settings |
 | --- | --- |
-| Inspect and mediate everything the sandbox sends | `allow_any_public_host` (or a broad `allowed_hosts`), `intercept_mode` `all` |
-| Mediate model and credential endpoints only; leave bulk traffic alone | `allowed_hosts`, `intercept_mode` `listed` |
-| Same, with open egress that is only metered | `allow_any_public_host`, `intercept_mode` `listed` |
-| Exempt a few heavy hosts from `all` mode | `intercept_mode` `all`, those hosts in `opaque_hosts` |
+| Inspect and mediate everything the sandbox sends | `allow_any_public_host` (or a broad `allowed_hosts`), `intercept_mode` `intercept` |
+| Mediate model and credential endpoints only; leave bulk traffic alone | `allowed_hosts`, `intercept_mode` `opaque` |
+| Same, with open egress that is only metered | `allow_any_public_host`, `intercept_mode` `opaque` |
+| Exempt a few heavy hosts from full interception | `intercept_mode` `intercept`, those hosts in `opaque_hosts` |
+| Keep bulk hosts cheap but enforce method/path and audit URLs | `inspect_hosts` with `allowed_rules` |
+| Audit and read-only-restrict every host, mediate only brokered ones | `intercept_mode` `inspect` |
 | Metadata-only audit, no interception | omit the interception CA (secret and OAuth brokers then refuse to start) |
 
 ### Reloading the client policy
 
 `veilgated` re-reads `VEILGATED_CLIENTS_FILE` when it receives `SIGHUP`, so
-`allowed_hosts`, `opaque_hosts`, `intercept_mode`, `intercept_hosts`, ports, and
-tokens can change without a restart. A file that cannot be read or fails
+`allowed_hosts`, `opaque_hosts`, `intercept_mode`, `intercept_hosts`,
+`inspect_hosts`, `allowed_rules`, ports, and tokens can change without a
+restart. A file that cannot be read or fails
 validation is logged (`client policy reload failed; keeping previous policy`)
 and the running policy stays in force. A successful reload logs
 `client policy reloaded`.

@@ -87,7 +87,11 @@ func (h *Handler) interceptHTTP2(conn *tls.Conn, outer *http.Request, identity *
 			}
 			item.DestinationIP = ip.String()
 			item.Trace("destination-ip", "pass", ip.String())
-			if err := h.mediateRequest(req, identity.Name, host, true, &item); err != nil {
+			inspect := h.handlingFor(current, host) == handlingInspect
+			if inspect {
+				item.Mode = "inspected-h2"
+			}
+			if err := h.admitInterceptedRequest(req, current, identity.Name, host, inspect, &item); err != nil {
 				item.Status = http.StatusBadRequest
 				if mediationErr, ok := errors.AsType[*mediationError](err); ok {
 					item.Status = mediationErr.status
@@ -113,7 +117,7 @@ func (h *Handler) interceptHTTP2(conn *tls.Conn, outer *http.Request, identity *
 			defer resp.Body.Close()
 			item.UpstreamProtocol = protocolLabel(resp.ProtoMajor, resp.ProtoMinor)
 			item.Trace("upstream", "pass", "response received over "+item.UpstreamProtocol)
-			if streaming, _ := shouldStreamResponse(req.Method, resp.StatusCode, resp.Header.Get("Content-Type")); streaming {
+			if streaming, _ := shouldStreamResponse(req.Method, resp.StatusCode, resp.Header.Get("Content-Type")); streaming && !inspect {
 				encoding, sse, err := h.prepareStreamingResponse(resp, identity.Name, host, &item)
 				if err != nil {
 					item.Status = http.StatusBadGateway
@@ -138,14 +142,19 @@ func (h *Handler) interceptHTTP2(conn *tls.Conn, outer *http.Request, identity *
 				item.Trace("response-streaming", "pass", "records scrubbed and flushed incrementally")
 				return
 			}
-			if err := h.mediateResponse(resp, identity.Name, host, &item); err != nil {
-				item.Status = http.StatusBadGateway
-				item.Reason = safeReason(err)
-				item.Trace("response-scrubbing", "fail", item.Reason)
-				http.Error(w, item.Reason, item.Status)
-				return
+			if inspect {
+				h.inspectResponse(resp, identity.Name, host, &item)
+				item.Trace("response-passthrough", "pass", "response body streamed without buffering")
+			} else {
+				if err := h.mediateResponse(resp, identity.Name, host, &item); err != nil {
+					item.Status = http.StatusBadGateway
+					item.Reason = safeReason(err)
+					item.Trace("response-scrubbing", "fail", item.Reason)
+					http.Error(w, item.Reason, item.Status)
+					return
+				}
+				item.Trace("response-scrubbing", "pass", secretTraceDetail(item.ResponseSecretNames))
 			}
-			item.Trace("response-scrubbing", "pass", secretTraceDetail(item.ResponseSecretNames))
 			removeHopHeaders(resp.Header)
 			copyHeaders(w.Header(), resp.Header)
 			for name := range resp.Trailer {

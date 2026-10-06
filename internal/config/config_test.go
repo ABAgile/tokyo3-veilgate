@@ -213,13 +213,15 @@ func TestInterceptModeValidation(t *testing.T) {
 		file    File
 		wantErr bool
 	}{
-		{"default is all", base(""), false},
-		{"explicit all", base(InterceptAll), false},
-		{"listed with hosts", base(InterceptListed, "API.Example.com."), false},
+		{"default is intercept", base(""), false},
+		{"explicit intercept", base(ModeIntercept), false},
+		{"opaque with hosts", base(ModeOpaque, "API.Example.com."), false},
+		{"inspect with hosts", base(ModeInspect, "api.example.com"), false},
+		{"hosts in the default mode", base("", "api.example.com"), false},
+		{"legacy all", base("all"), false},
+		{"legacy listed", base("listed", "api.example.com"), false},
 		{"unknown mode", base("some"), true},
-		{"hosts require listed", base(InterceptAll, "api.example.com"), true},
-		{"hosts require listed when mode unset", base("", "api.example.com"), true},
-		{"invalid pattern", base(InterceptListed, "api.*.example.com"), true},
+		{"invalid pattern", base(ModeOpaque, "api.*.example.com"), true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := test.file.Validate()
@@ -229,13 +231,13 @@ func TestInterceptModeValidation(t *testing.T) {
 		})
 	}
 
-	file := base(InterceptListed, "API.Example.com.", "*.Models.example")
+	file := base(ModeOpaque, "API.Example.com.", "*.Models.example")
 	if err := file.Validate(); err != nil {
 		t.Fatal(err)
 	}
 	client := &file.Clients[0]
-	if !client.InterceptsListedOnly() {
-		t.Fatal("expected listed-only mode")
+	if client.InterceptMode != ModeOpaque {
+		t.Fatalf("mode = %q, want %q", client.InterceptMode, ModeOpaque)
 	}
 	for host, want := range map[string]bool{
 		"api.example.com":  true,
@@ -249,8 +251,14 @@ func TestInterceptModeValidation(t *testing.T) {
 		}
 	}
 	def := base("")
-	if err := def.Validate(); err != nil || def.Clients[0].InterceptsListedOnly() {
-		t.Fatalf("default mode must intercept all, err = %v", err)
+	if err := def.Validate(); err != nil || def.Clients[0].InterceptMode != ModeIntercept {
+		t.Fatalf("default mode = %q, want %q, err = %v", def.Clients[0].InterceptMode, ModeIntercept, err)
+	}
+	for legacy, want := range map[string]string{"all": ModeIntercept, "listed": ModeOpaque} {
+		old := base(legacy)
+		if err := old.Validate(); err != nil || old.Clients[0].InterceptMode != want {
+			t.Fatalf("legacy mode %q = %q, want %q, err = %v", legacy, old.Clients[0].InterceptMode, want, err)
+		}
 	}
 }
 
@@ -283,5 +291,148 @@ func TestFileClientLooksUpByName(t *testing.T) {
 	}
 	if _, ok := f.Client("missing"); ok {
 		t.Fatal("unexpected client")
+	}
+}
+
+func TestAllowedRulesValidationAndMatching(t *testing.T) {
+	f := &File{Clients: []Client{{
+		Name: "agent", Token: "012345678901234567890123", AllowedHosts: []string{"*.example.com"},
+		InspectHosts: []string{"STORAGE.example.com."},
+		AllowedRules: []Rule{
+			{Host: "Storage.Example.com", Methods: []string{"get", "HEAD"}, PathPrefixes: []string{"/bucket", "/data/"}},
+			{Host: "storage.example.com", Methods: []string{"PUT"}, PathPrefixes: []string{"/up/"}, MaxRequestBytes: 8},
+		},
+	}}}
+	if err := f.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	client := &f.Clients[0]
+	if !client.InspectsHost("storage.example.com") || client.InspectsHost("other.example.com") {
+		t.Fatal("InspectsHost did not match the normalized pattern")
+	}
+	if !client.HasRulesFor("STORAGE.example.com.") || client.HasRulesFor("other.example.com") {
+		t.Fatal("HasRulesFor did not scope rules to their host")
+	}
+	for _, test := range []struct {
+		host, method, path string
+		want               bool
+		max                int64
+	}{
+		{"storage.example.com", "GET", "/bucket", true, 0},
+		{"storage.example.com", "GET", "/bucket/obj", true, 0},
+		{"storage.example.com", "HEAD", "/data/x", true, 0},
+		{"storage.example.com", "GET", "/bucketeer", false, 0},
+		{"storage.example.com", "GET", "/data", false, 0},
+		{"storage.example.com", "POST", "/bucket/x", false, 0},
+		{"storage.example.com", "PUT", "/up/x", true, 8},
+		{"storage.example.com", "PUT", "/bucket/x", false, 0},
+		{"other.example.com", "DELETE", "/anything", true, 0},
+	} {
+		rule, ok := client.MatchRule(test.host, test.method, test.path)
+		if ok != test.want || (rule != nil && rule.MaxRequestBytes != test.max) {
+			t.Errorf("MatchRule(%s %s %s) = %v, %v", test.host, test.method, test.path, rule, ok)
+		}
+	}
+}
+
+func TestAllowedRulesRejectInvalidEntries(t *testing.T) {
+	for name, rule := range map[string]Rule{
+		"empty rule":      {Host: "a.example.com"},
+		"bad host":        {Host: "bad host", Methods: []string{"GET"}},
+		"bad method":      {Host: "a.example.com", Methods: []string{"GE T"}},
+		"connect":         {Host: "a.example.com", Methods: []string{"CONNECT"}},
+		"relative prefix": {Host: "a.example.com", PathPrefixes: []string{"bucket/"}},
+		"dot segment":     {Host: "a.example.com", PathPrefixes: []string{"/a/../b"}},
+		"encoded prefix":  {Host: "a.example.com", PathPrefixes: []string{"/a%2fb"}},
+		"empty segment":   {Host: "a.example.com", PathPrefixes: []string{"/a//b"}},
+		"negative cap":    {Host: "a.example.com", Methods: []string{"PUT"}, MaxRequestBytes: -1},
+	} {
+		f := &File{Clients: []Client{{
+			Name: "agent", Token: "012345678901234567890123", AllowedHosts: []string{"a.example.com"},
+			AllowedRules: []Rule{rule},
+		}}}
+		if err := f.Validate(); err == nil {
+			t.Errorf("%s: Validate() accepted the rule", name)
+		}
+	}
+}
+
+func TestAllowedRulesExpandMultipleHosts(t *testing.T) {
+	f := &File{Clients: []Client{{
+		Name: "agent", Token: "012345678901234567890123", AllowAnyPublicHost: true,
+		AllowedRules: []Rule{
+			{Hosts: []string{"A.example.com", "*.cdn.example.com", "a.example.com."}, Methods: []string{"get", "head"}},
+			{Host: "b.example.com", Methods: []string{"PUT"}, MaxRequestBytes: 4},
+		},
+	}}}
+	if err := f.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	client := &f.Clients[0]
+	if len(client.AllowedRules) != 3 {
+		t.Fatalf("expanded rules = %+v, want 3 (duplicate host removed)", client.AllowedRules)
+	}
+	for _, rule := range client.AllowedRules {
+		if rule.Hosts != nil || rule.Host == "" {
+			t.Fatalf("rule not expanded to a single host: %+v", rule)
+		}
+	}
+	client.AllowedRules[0].Methods[0] = "POST"
+	if client.AllowedRules[1].Methods[0] != "GET" {
+		t.Fatal("expanded rules share a methods slice")
+	}
+	client.AllowedRules[0].Methods[0] = "GET"
+	for _, test := range []struct {
+		host, method string
+		want         bool
+	}{
+		{"a.example.com", "GET", true},
+		{"x.cdn.example.com", "HEAD", true},
+		{"x.cdn.example.com", "PUT", false},
+		{"b.example.com", "GET", false},
+		{"b.example.com", "PUT", true},
+	} {
+		if _, ok := client.MatchRule(test.host, test.method, "/"); ok != test.want {
+			t.Errorf("MatchRule(%s %s) = %v, want %v", test.host, test.method, ok, test.want)
+		}
+	}
+	if err := f.Validate(); err != nil || len(client.AllowedRules) != 3 {
+		t.Fatalf("second Validate() = %v, rules = %d; want idempotent", err, len(client.AllowedRules))
+	}
+}
+
+func TestAllowedRulesRejectBadHostSelection(t *testing.T) {
+	for name, rule := range map[string]Rule{
+		"host and hosts": {Host: "a.example.com", Hosts: []string{"b.example.com"}, Methods: []string{"GET"}},
+		"no host":        {Methods: []string{"GET"}},
+		"bad hosts item": {Hosts: []string{"a.example.com", "bad host"}, Methods: []string{"GET"}},
+	} {
+		f := &File{Clients: []Client{{
+			Name: "agent", Token: "012345678901234567890123", AllowAnyPublicHost: true,
+			AllowedRules: []Rule{rule},
+		}}}
+		if err := f.Validate(); err == nil {
+			t.Errorf("%s: Validate() accepted the rule", name)
+		}
+	}
+}
+
+func TestInterceptModeInspect(t *testing.T) {
+	f := &File{Clients: []Client{{
+		Name: "agent", Token: "012345678901234567890123", AllowedHosts: []string{"a.example.com"},
+		InterceptMode: ModeInspect, InterceptHosts: []string{"A.example.com"},
+	}}}
+	if err := f.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if f.Clients[0].InterceptHosts[0] != "a.example.com" {
+		t.Fatalf("intercept_hosts = %v, want normalized", f.Clients[0].InterceptHosts)
+	}
+	bad := &File{Clients: []Client{{
+		Name: "agent", Token: "012345678901234567890123", AllowedHosts: []string{"a.example.com"},
+		InterceptMode: "everything",
+	}}}
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "inspect") {
+		t.Fatalf("Validate() = %v, want an error naming the valid modes", err)
 	}
 }

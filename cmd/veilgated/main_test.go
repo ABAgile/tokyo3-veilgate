@@ -200,11 +200,11 @@ func TestReloadClientPolicyKeepsPreviousPolicyOnInvalidFile(t *testing.T) {
 	applied := target.policy
 
 	for name, content := range map[string]string{
-		"malformed":      `{"clients":[`,
-		"no clients":     `{"clients":[]}`,
-		"unknown field":  `{"clients":[{"name":"a","token":"012345678901234567890123","allowed_hosts":["example.com"],"bogus":1}]}`,
-		"short token":    `{"clients":[{"name":"a","token":"short","allowed_hosts":["example.com"]}]}`,
-		"listed missing": `{"clients":[{"name":"a","token":"012345678901234567890123","allowed_hosts":["example.com"],"intercept_hosts":["x.example"]}]}`,
+		"malformed":              `{"clients":[`,
+		"no clients":             `{"clients":[]}`,
+		"unknown field":          `{"clients":[{"name":"a","token":"012345678901234567890123","allowed_hosts":["example.com"],"bogus":1}]}`,
+		"short token":            `{"clients":[{"name":"a","token":"short","allowed_hosts":["example.com"]}]}`,
+		"unknown intercept mode": `{"clients":[{"name":"a","token":"012345678901234567890123","allowed_hosts":["example.com"],"intercept_mode":"bogus"}]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			write(content)

@@ -72,7 +72,7 @@ type SecretBroker interface {
 }
 
 // hostScoper is implemented by brokers that act only on configured hosts. It
-// lets a client in intercept_mode "listed" mediate exactly the destinations a
+// lets a client in intercept_mode "opaque" mediate exactly the destinations a
 // broker needs to see.
 type hostScoper interface {
 	ScopesHost(client, host string) bool
@@ -350,17 +350,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.Decision = "allowed"
 
 	if r.Method == http.MethodConnect {
-		opaque := h.usesOpaqueTunnel(client, host)
+		mode := h.handlingFor(client, host)
+		opaque := mode == handlingOpaque
 		if h.Interceptor != nil && !opaque {
 			f.Mode = "intercepted-session"
-			f.Trace("tls-mediation", "pass", "HTTP/2 or HTTP/1.1 interception selected")
+			detail := "HTTP/2 or HTTP/1.1 interception selected"
+			if mode == handlingInspect {
+				f.Mode = "inspected-session"
+				detail = "metadata-only interception selected; bodies stream unmodified"
+			}
+			f.Trace("tls-mediation", "pass", detail)
 			f.Status, f.BytesSent, f.BytesReceived, f.Reason = h.intercept(w, r, client, host, port, f.SessionID)
 			return
 		}
-		if h.Secrets != nil && !opaque {
+		if h.Secrets != nil && !opaque || mode == handlingInspect {
 			f.Decision = "denied"
 			f.Status = http.StatusServiceUnavailable
 			f.Reason = "secret broker requires TLS interception"
+			if h.Secrets == nil {
+				f.Reason = "allowed_rules and inspect_hosts require TLS interception"
+			}
 			f.Trace("tls-mediation", "fail", f.Reason)
 			http.Error(w, f.Reason, http.StatusServiceUnavailable)
 			return
@@ -372,6 +381,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			f.Trace("tls-mediation", "pass", "opaque tunnel selected")
 		}
 		f.Status, f.BytesSent, f.BytesReceived, f.Reason = h.tunnel(w, r, ip, port)
+		return
+	}
+	if err := h.enforceRequestRules(r, client, host, &f); err != nil {
+		f.Decision = "denied"
+		f.Status = http.StatusForbidden
+		if mediationErr, ok := errors.AsType[*mediationError](err); ok {
+			f.Status = mediationErr.status
+		}
+		f.Reason = safeReason(err)
+		http.Error(w, f.Reason, f.Status)
 		return
 	}
 	if h.Secrets != nil {
@@ -396,18 +415,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // usesOpaqueTunnel reports whether an allowed CONNECT destination stays an
-// opaque TCP tunnel. opaque_hosts always wins. In intercept_mode "listed",
-// everything else is opaque unless it is in intercept_hosts or a broker is
-// scoped to the client for that host.
+// opaque TCP tunnel. See handlingFor for the precedence.
 func (h *Handler) usesOpaqueTunnel(client *config.Client, host string) bool {
-	if client.UsesOpaqueTunnel(host) {
-		return true
-	}
-	if !client.InterceptsListedOnly() || client.InterceptsListedHost(host) {
-		return false
-	}
-	scoper, ok := h.Secrets.(hostScoper)
-	return !ok || !scoper.ScopesHost(client.Name, host)
+	return h.handlingFor(client, host) == handlingOpaque
 }
 
 func (h *Handler) recordFlow(item flow.Flow) {
@@ -795,6 +805,7 @@ func (h *Handler) intercept(w http.ResponseWriter, outer *http.Request, identity
 		totalReceived += received
 		h.recordFlow(item)
 		if closeConnection {
+			h.drainRequestBody(req)
 			return http.StatusOK, totalSent, totalReceived, reason
 		}
 	}
@@ -833,7 +844,17 @@ func (h *Handler) handleInterceptedRequest(downstream io.Writer, downstreamReade
 		_ = writeSimpleResponse(downstream, req, http.StatusBadRequest, reason)
 		return http.StatusBadRequest, 0, 0, reason, true
 	}
-	if err := h.mediateRequest(req, identity.Name, host, true, item); err != nil {
+	inspect := h.handlingFor(current, host) == handlingInspect
+	if inspect {
+		item.Mode = "inspected"
+		if isWebSocketUpgrade(req) {
+			reason := "WebSocket upgrades are not supported on inspect-only hosts"
+			item.Trace("websocket-handshake", "fail", reason)
+			_ = writeSimpleResponse(downstream, req, http.StatusBadRequest, reason)
+			return http.StatusBadRequest, 0, 0, reason, true
+		}
+	}
+	if err := h.admitInterceptedRequest(req, current, identity.Name, host, inspect, item); err != nil {
 		status := http.StatusBadRequest
 		if mediationErr, ok := errors.AsType[*mediationError](err); ok {
 			status = mediationErr.status
@@ -860,7 +881,7 @@ func (h *Handler) handleInterceptedRequest(downstream io.Writer, downstreamReade
 	defer resp.Body.Close()
 	item.UpstreamProtocol = protocolLabel(resp.ProtoMajor, resp.ProtoMinor)
 	item.Trace("upstream", "pass", "response received over "+item.UpstreamProtocol)
-	if streaming, _ := shouldStreamResponse(req.Method, resp.StatusCode, resp.Header.Get("Content-Type")); streaming {
+	if streaming, _ := shouldStreamResponse(req.Method, resp.StatusCode, resp.Header.Get("Content-Type")); streaming && !inspect {
 		resp.Close = req.Close || resp.Close
 		encoding, sse, err := h.prepareStreamingResponse(resp, identity.Name, host, item)
 		if err != nil {
@@ -890,13 +911,18 @@ func (h *Handler) handleInterceptedRequest(downstream io.Writer, downstreamReade
 		item.Trace("response-streaming", "pass", "records scrubbed and flushed incrementally")
 		return resp.StatusCode, sent, received, "", req.Close || resp.Close
 	}
-	if err := h.mediateResponse(resp, identity.Name, host, item); err != nil {
-		reason := safeReason(err)
-		item.Trace("response-scrubbing", "fail", reason)
-		_ = writeSimpleResponse(downstream, req, http.StatusBadGateway, reason)
-		return http.StatusBadGateway, sent, 0, reason, true
+	if inspect {
+		h.inspectResponse(resp, identity.Name, host, item)
+		item.Trace("response-passthrough", "pass", "response body streamed without buffering")
+	} else {
+		if err := h.mediateResponse(resp, identity.Name, host, item); err != nil {
+			reason := safeReason(err)
+			item.Trace("response-scrubbing", "fail", reason)
+			_ = writeSimpleResponse(downstream, req, http.StatusBadGateway, reason)
+			return http.StatusBadGateway, sent, 0, reason, true
+		}
+		item.Trace("response-scrubbing", "pass", secretTraceDetail(item.ResponseSecretNames))
 	}
-	item.Trace("response-scrubbing", "pass", secretTraceDetail(item.ResponseSecretNames))
 	removeHopHeaders(resp.Header)
 	resp.Close = req.Close
 	var received int64
@@ -908,6 +934,7 @@ func (h *Handler) handleInterceptedRequest(downstream io.Writer, downstreamReade
 	resp.Proto = "HTTP/1.1"
 	resp.ProtoMajor = 1
 	resp.ProtoMinor = 1
+	frameStreamedResponse(req, resp)
 	if err := resp.Write(downstream); err != nil {
 		return resp.StatusCode, sent, received, safeReason(err), true
 	}
@@ -995,7 +1022,7 @@ func (h *Handler) roundTrip(r *http.Request, ip netip.Addr, port int, scheme str
 
 	cached := h.acquireUpstreamTransport(scheme, out.URL.Hostname(), ip, port)
 	if cached == nil {
-		return nil, sent, errHandlerClosed
+		return nil, atomic.LoadInt64(&sent), errHandlerClosed
 	}
 	resp, err := cached.transport.RoundTrip(out)
 	if err != nil {
@@ -1003,17 +1030,17 @@ func (h *Handler) roundTrip(r *http.Request, ip netip.Addr, port int, scheme str
 			_ = resp.Body.Close()
 		}
 		h.releaseUpstreamTransport(cached)
-		return resp, sent, err
+		return resp, atomic.LoadInt64(&sent), err
 	}
 	if resp == nil || resp.Body == nil {
 		h.releaseUpstreamTransport(cached)
-		return nil, sent, errors.New("upstream transport returned a response without a body")
+		return nil, atomic.LoadInt64(&sent), errors.New("upstream transport returned a response without a body")
 	}
 	resp.Body = &trackedResponseBody{
 		ReadCloser: resp.Body,
 		release:    func() { h.releaseUpstreamTransport(cached) },
 	}
-	return resp, sent, nil
+	return resp, atomic.LoadInt64(&sent), nil
 }
 
 func (h *Handler) dialContext() func(context.Context, string, string) (net.Conn, error) {
@@ -1146,7 +1173,7 @@ type countingReadCloser struct {
 
 func (r *countingReadCloser) Read(p []byte) (int, error) {
 	n, err := r.ReadCloser.Read(p)
-	*r.n += int64(n)
+	atomic.AddInt64(r.n, int64(n))
 	return n, err
 }
 

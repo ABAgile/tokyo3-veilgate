@@ -45,23 +45,27 @@ func (h *Handler) captureLimit() int64 {
 	return defaultCaptureLimit
 }
 
-func (h *Handler) mediateRequest(req *http.Request, client, host string, secure bool, item *flow.Flow) error {
+// mediateRequestHead applies the body-independent request policy: expectation
+// handling, query and path placeholder guards, query capture, and header and
+// query secret substitution. It returns the substituted secret names and the
+// header values to redact from captures.
+func (h *Handler) mediateRequestHead(req *http.Request, client, host string, secure bool, item *flow.Flow) ([]string, [][]byte, error) {
 	redactions := sensitiveHeaderValues(req.Header)
 	if expectation := strings.TrimSpace(req.Header.Get("Expect")); expectation != "" {
 		if !strings.EqualFold(expectation, "100-continue") {
-			return &mediationError{http.StatusExpectationFailed, errors.New("unsupported request expectation")}
+			return nil, nil, &mediationError{http.StatusExpectationFailed, errors.New("unsupported request expectation")}
 		}
 		req.Header.Del("Expect")
 	}
 	if req.URL != nil && int64(len(req.URL.RawQuery)) > h.mediationLimit() {
-		return &mediationError{http.StatusRequestURITooLong, errors.New("query string exceeds mediation limit")}
+		return nil, nil, &mediationError{http.StatusRequestURITooLong, errors.New("query string exceeds mediation limit")}
 	}
 	if h.Secrets != nil && req.URL != nil && h.Secrets.ContainsPlaceholder([]byte(req.URL.EscapedPath())) {
-		return &mediationError{http.StatusForbidden, errors.New("secret placeholders are not allowed in URL paths")}
+		return nil, nil, &mediationError{http.StatusForbidden, errors.New("secret placeholders are not allowed in URL paths")}
 	}
 	query, err := captureQuery(req.URL, h.Secrets, redactions)
 	if err != nil {
-		return &mediationError{http.StatusBadRequest, err}
+		return nil, nil, &mediationError{http.StatusBadRequest, err}
 	}
 	if int64(len(query)) > h.captureLimit() {
 		query = query[:h.captureLimit()]
@@ -73,19 +77,26 @@ func (h *Handler) mediateRequest(req *http.Request, client, host string, secure 
 	if h.Secrets != nil {
 		headerNames, err := h.Secrets.Apply(req, client, host, secure)
 		if err != nil {
-			return &mediationError{http.StatusForbidden, err}
+			return nil, nil, &mediationError{http.StatusForbidden, err}
 		}
 		queryNames, err := h.Secrets.SubstituteQuery(req.URL, client, host, secure)
 		if err != nil {
-			return &mediationError{http.StatusForbidden, err}
+			return nil, nil, &mediationError{http.StatusForbidden, err}
 		}
 		if req.URL != nil && int64(len(req.URL.RawQuery)) > h.mediationLimit() {
-			return &mediationError{http.StatusRequestURITooLong, errors.New("substituted query string exceeds mediation limit")}
+			return nil, nil, &mediationError{http.StatusRequestURITooLong, errors.New("substituted query string exceeds mediation limit")}
 		}
 		names = mergeNames(headerNames, queryNames)
 		redactions = append(redactions, sensitiveHeaderValues(req.Header)...)
 	}
+	return names, redactions, nil
+}
 
+func (h *Handler) mediateRequest(req *http.Request, client, host string, secure bool, item *flow.Flow) error {
+	names, redactions, err := h.mediateRequestHead(req, client, host, secure, item)
+	if err != nil {
+		return err
+	}
 	if req.Body == nil || req.Body == http.NoBody {
 		item.SecretNames = names
 		item.Capture.RequestHeaders, item.Capture.Truncated = captureHeaders(req.Header, req.Host, h.Secrets, h.captureLimit())
